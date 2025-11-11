@@ -12,8 +12,6 @@ We have prepared some tiny datasets for testing in benchmarks folder. You can do
 - msong: [GoogleDrive](https://drive.google.com/file/d/1g3lKhrjIqYMKjahJdf9LH5HuuSuhP3so/view?usp=drive_link)
 - sift1m: [GoogleDrive](https://drive.google.com/file/d/1BcTuT4su77_Ue6Wi8EU340HSYoJeHwnD/view?usp=drive_link)
 
-If you build from docker, it will automatically download nuswide dataset from the link above.
-
 ### Dataset Format
 
 You can prepare your own dataset in the following format, place it in the benchmarks folder.
@@ -184,6 +182,12 @@ Optional arguments:
   --dataset_info      only output dataset-info to csv file 
   --early_stop        early stop
 ```
+
+## Reproduce
+
+If you wish to fully reproduce our experiments, we highly recommend referring to the [`REPRODUCE.md`](REPRODUCE.md) document, which executes the experiments in a carefully orchestrated order to minimize execution time, and ensures that only the experiments mentioned in the paper are run.
+
+If you need to understand the workflow of our experiments and how a dataset is tested, you can refer to [`figures/run_nuswide.sh`](figures/run_nuswide.sh), which shows you the entire workflow, and you can make any modifications based on it.
 
 ## Usage in Your Own Project
 

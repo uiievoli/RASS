@@ -6,6 +6,8 @@ loop=3
 output_csv_file="./logs/$target-recall-qps-tribase.csv"
 faiss_output_csv_file="./logs/$target-recall-qps-faiss.csv"
 
+rm -rf $output_csv_file $faiss_output_csv_file
+
 declare -A nprobes_dict
 
 nprobes_dict["nuswide"]="1 3 5 7 10 30 50 70 100 150 200 250 300 350 400 450 500 510 513 516 0" # 518 518

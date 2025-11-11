@@ -21,7 +21,7 @@ add_elapseds = add_elapseds.reshape(-1, 10).mean(axis=0)[1::2]
 
 
 # 设置全局字体大小
-plt.rcParams['font.family'] = 'Arial'
+
 plt.rcParams.update({'font.size': 22})
 
 # 定义数据点

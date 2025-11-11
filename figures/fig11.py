@@ -66,9 +66,17 @@ for i, dataset_label in enumerate(args.dataset):
     for j, (opt_level, label) in enumerate(zip([1, 2, 4, 7], labels)):
         # axs[i].plot(x_positions, data[dataset][label] * 100, markers[j], label=label, color=colors[j], markerfacecolor=colors[j])
         data = df[(df["dataset"] == dataset_label) & (df["opt_level"] == opt_level)]
+        data = data[(data["nprobe"] / data["nlist"] <= 0.95) | (data["nprobe"] / data["nlist"] >= 1.0)]
+        pruning = data[["tri", "tri_large", "subnn_L2", "subnn_IP"]].values.sum(axis=1)[1:]
+        total = pruning / (1 - 1 / data["pruning_speedup"].values[1:])
+        # pruning_ratio = 100 * pruning / total
+        delta_pruning = np.diff(pruning, prepend=0)
+        delta_total = np.diff(total, prepend=0)
+        
         axs[i].plot(
-            data["nprobe"].values / data["nlist"].values,
-            100 * (1 - 1 / data["pruning_speedup"].values),
+            data["nprobe"].values[1:] / data["nlist"].values[1:],
+            # 100 * (1 - 1 / data["pruning_speedup"].values),
+            100 * delta_pruning / delta_total,
             markers[j],
             label=label,
             color=colors[j],

@@ -28,22 +28,40 @@ with open(f'logs/hnswlib_recall_release.csv', 'r') as file:
 # 转换为DataFrame
 df = pd.DataFrame(data, columns=['dataset', 'ef', 'tri_ef', 'qps', 'min_time', 'recall'])
 
-# 只保留recall > 0.9的数据
-df = df[df['recall'] > 0]
+datasets = ["msong", "sift1m", "nuswide", "fasion_mnist_784", "glove25"] # , "HandOutlines", "StarLightCurves"
+query_nums = {
+    "msong": 1000,
+    "sift1m": 10000,
+    "nuswide": 200,
+    "fasion_mnist_784": 10000,
+    "glove25": 10000
+}
+recall_ranges = {
+    "msong": (0.9, 1),
+    "sift1m": (0.7, 1),
+    "nuswide": (0, 1),
+    "fasion_mnist_784": (0.8, 1),
+    "glove25": (0.7, 1)
+}
 
 # 提取trief=0的数据
 def extract_trief_0_data(dataset_name):
+    num_query = query_nums[dataset_name]
     dataset = df[df['dataset'] == dataset_name]
+    dataset = dataset[(dataset['recall'] >= recall_ranges[dataset_name][0]) & (dataset['recall'] <= recall_ranges[dataset_name][1])]
     trief_0 = dataset[dataset['tri_ef'] == 0].copy()
+    trief_0['qps'] = trief_0['qps'] * num_query
     return trief_0
 
 # 提取trief!=0的数据并适当调整
 def calculate_trief_non_0_data(dataset_name):
+    num_query = query_nums[dataset_name]
     dataset = df[df['dataset'] == dataset_name]
+    dataset = dataset[(dataset['recall'] >= recall_ranges[dataset_name][0]) & (dataset['recall'] <= recall_ranges[dataset_name][1])]
     trief_non_0 = dataset[dataset['tri_ef'] != 0].copy()
+    trief_non_0['qps'] = trief_non_0['qps'] * num_query
     return trief_non_0.groupby('ef').apply(lambda x: x.nlargest(1, 'qps')).reset_index(drop=True)
 
-datasets = ["fasion_mnist_784", "nuswide", "msong", "sift1m", "glove25"] # , "HandOutlines", "StarLightCurves"
 
 data = {
     name_map(dataset): (
@@ -67,7 +85,7 @@ for i, (name, (trief_0, trief_non_0)) in enumerate(data.items(), start=1):
     # plt.gca().yaxis.get_major_formatter().set_powerlimits((0, 1))
         # 设置y轴为科学计数法并调整字体大小
     formatter = mticker.ScalarFormatter(useMathText=True)
-    # formatter.set_powerlimits((5, 5))  # 只显示10的5次方
+    formatter.set_powerlimits((5, 5))  # 只显示10的5次方
     plt.gca().yaxis.set_major_formatter(formatter)
     plt.gca().yaxis.get_major_formatter().set_scientific(True)  # 启用科学计数法
     
@@ -75,8 +93,6 @@ for i, (name, (trief_0, trief_non_0)) in enumerate(data.items(), start=1):
     plt.gca().tick_params(axis='y', labelsize=20)  # 增大y轴刻度数字字体大小
     plt.gca().yaxis.get_offset_text().set_size(20)  # 增大科学计数法的字体大小
     plt.tick_params(axis='both', which='major', labelsize=20)  # 设置刻度数字字体大小
-
-
 
 # 只添加一个统一的图例
 plt.figlegend(['trief=0', 'trief!=0, max qps'], loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=2, fontsize='20', frameon=False)

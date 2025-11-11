@@ -11,6 +11,8 @@ int main(int argc, char* argv[]) {
     program.add_argument("--dataset").help("dataset name").default_value(std::string("sift10k"));
     program.add_argument("--k").help("knn").default_value(size_t(1)).action([](const std::string& value) -> size_t { return std::stoul(value); });
     program.add_argument("--tag").help("csv tag").default_value(std::string(""));
+    program.add_argument("--minef").action([](const std::string& value) -> size_t { return std::stoul(value); }).default_value(size_t(1)).help("min ef");
+    program.add_argument("--maxef").action([](const std::string& value) -> size_t { return std::stoul(value); }).default_value(size_t(1000)).help("max ef");
     program.add_argument("--pure_hnsw").help("use pure hnsw").default_value(false).implicit_value(true);
     program.add_argument("--build_only").help("build only").default_value(false).implicit_value(true);
     try {
@@ -31,6 +33,8 @@ int main(int argc, char* argv[]) {
 
     bool pure_hnsw = program.get<bool>("pure_hnsw");
     bool build_only = program.get<bool>("build_only");
+    size_t min_ef = program.get<size_t>("minef");
+    size_t max_ef = program.get<size_t>("maxef");
 
     std::string index_path = std::format("{}/{}/index/hnsw_index_tri={}.index", benchmarks_path, dataset, !pure_hnsw);
 
@@ -101,12 +105,18 @@ int main(int argc, char* argv[]) {
     for (size_t ef = std::max((size_t)30, k); ef < 100; ef += 10) {
         efs.push_back(ef);
     }
-    // for (size_t ef = std::max((size_t)100, k); ef < 1000; ef += 100) {
-    //     efs.push_back(ef);
-    // }
+    for (size_t ef = std::max((size_t)100, k); ef < 1000; ef += 100) {
+        efs.push_back(ef);
+    }
     std::cout << "Testing..." << std::endl;
     bool stop_flag = false;
     for (size_t ef : efs) {
+        if(ef < min_ef){
+            continue;
+        }
+        if(ef >= max_ef){
+            break;
+        }
         const int loop = 5;
         std::unique_ptr<float[]> hnswlib_dis = std::make_unique<float[]>(nq * k);
         std::unique_ptr<idx_t[]> hnswlib_ids = std::make_unique<idx_t[]>(nq * k);

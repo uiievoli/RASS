@@ -21,7 +21,7 @@ mpl.rcParams['ps.fonttype'] = 42   # 设置为Type 1字体
 
 
 plt.rcParams['font.size'] = 22  # 调整字体大小
-plt.rcParams['font.family'] = 'Arial'
+
 
 datasets = args.dataset
 
