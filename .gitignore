@@ -23,6 +23,10 @@ benchmarks/8d512s
 benchmarks/8d65536s
 benchmarks/8d1048576s
 benchmarks/16d65536s
+benchmarks/sift1m_mp
+benchmarks/sift100k_mp
+benchmarks/dbpedia1536m
+benchmarks/dbpedia1536m_holdout
 analysis.txt
 *.log
 *workspace
@@ -32,3 +36,10 @@ logs/*.csv
 __pycache__
 /figures/*.png
 benchmarks.zip
+build-perf
+build-release
+build-stats
+reports
+/Tribase-*.tar.gz
+/Tribase-*.tar.gz.sha256
+/scripts/sample_bvecs_gz

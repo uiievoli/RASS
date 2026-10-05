@@ -3,6 +3,9 @@
 
 #include <fstream>
 #include <memory>
+#include <vector>
+#include "Microblock.h"
+#include "MultiPivot.h"
 #include "common.h"
 
 namespace tribase {
@@ -25,10 +28,12 @@ class IVF {
     std::unique_ptr<float[]> sub_nearest_IP_dis;
     std::unique_ptr<idx_t[]> sub_farest_IP_id;
     std::unique_ptr<float[]> sub_farest_IP_dis;
+    PivotMetadata pivots;
+    std::vector<MicroblockMeta> microblocks;
 
    public:
     // Constructor
-    IVF(size_t listSize = 0, size_t d = 0, size_t subK = 0, OptLevel optLevel = OptLevel::OPT_ALL);
+    IVF(size_t listSize = 0, size_t d = 0, size_t subK = 0, OptLevel optLevel = OptLevel::OPT_NONE);
 
     // Destructor
     ~IVF();
@@ -42,9 +47,13 @@ class IVF {
     IVF& operator=(IVF&&) noexcept;
 
     void reset(size_t listSize, size_t d, size_t subK, OptLevel optLevel = OptLevel::OPT_ALL);
+    // Allocate any missing pruning arrays for `needed` without wiping codes/ids.
+    void ensure_opt_storage(OptLevel needed, size_t subK);
 
     void save_IVF(std::ostream& os) const;
     void load_IVF(std::istream& is);
+    // Vanilla Tribase IVF blocks have no PivotMetadata trailer.
+    void load_IVF_legacy(std::istream& is);
 
     // Additional methods to manipulate the data can be added here
     size_t get_list_size() const { return list_size; }
@@ -71,6 +80,7 @@ class IVF {
     const idx_t get_sub_farest_IP_id(size_t i, size_t k) const { return sub_farest_IP_id[i * sub_k + k]; }
     const float* get_sub_farest_IP_dis() const { return sub_farest_IP_dis.get(); }
     const float get_sub_farest_IP_dis(size_t i, size_t k) const { return sub_farest_IP_dis[i * sub_k + k]; }
+    const PivotMetadata& get_pivots() const { return pivots; }
 };
 }  // namespace tribase
 

@@ -7,7 +7,7 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -212,7 +212,7 @@ inline std::tuple<std::unique_ptr<uint8_t[]>, size_t, int> loadBvecs(const std::
     file.read(reinterpret_cast<char*>(&d), sizeof(int));
     int vecSizeof = 4 + d;  // int + d * uint8_t
 
-    size_t bmax = (fileSize - 4) / vecSizeof;
+    size_t bmax = fileSize / vecSizeof;
 
     size_t a = bounds.first;
     size_t b = (bounds.second == 0) ? bmax : bounds.second;
@@ -222,7 +222,7 @@ inline std::tuple<std::unique_ptr<uint8_t[]>, size_t, int> loadBvecs(const std::
     size_t n = b - a + 1;
     std::unique_ptr<uint8_t[]> vectors = std::make_unique<uint8_t[]>(n * d);
 
-    file.seekg(4 + (a - 1) * vecSizeof, std::ios::beg);
+    file.seekg((a - 1) * vecSizeof, std::ios::beg);
 
     for (size_t i = 0; i < n; ++i) {
         file.seekg(4, std::ios::cur);
@@ -232,32 +232,120 @@ inline std::tuple<std::unique_ptr<uint8_t[]>, size_t, int> loadBvecs(const std::
     return std::make_tuple(std::move(vectors), n, d);
 }
 
-inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadBvecs2Fvecs(const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
-    auto [vectors, n, d] = loadBvecs(filePath, bounds);
-    std::unique_ptr<float[]> vectors2 = std::make_unique<float[]>(n * d);
-#pragma omp parallel for
-    for (size_t i = 0; i < n; i++) {
-        for (size_t j = 0; j < d; j++) {
-            vectors2[i * d + j] = static_cast<float>(vectors[i * d + j]);
-        }
-    }
-    return std::make_tuple(std::move(vectors2), n, d);
-}
-
 inline std::pair<size_t, int> loadXvecsInfo(const std::string& filePath) {
     if (filePath.ends_with(".fvecs")) {
         return loadFvecsInfo(filePath);
-    } else if (filePath.ends_with(".bvecs")) {
+    }
+    if (filePath.ends_with(".bvecs")) {
         return loadBvecsInfo(filePath);
     }
+    if (filePath.ends_with(".i8bin")) {
+        std::ifstream file(filePath, std::ios::binary);
+        uint32_t n = 0, d = 0;
+        if (!file.read(reinterpret_cast<char*>(&n), sizeof(n)) ||
+            !file.read(reinterpret_cast<char*>(&d), sizeof(d)) || n == 0 || d == 0) {
+            throw std::runtime_error("Invalid i8bin header: " + filePath);
+        }
+        const uint64_t expected = 8ULL + static_cast<uint64_t>(n) * d;
+        if (std::filesystem::file_size(filePath) != expected) {
+            throw std::runtime_error("Invalid i8bin size: " + filePath);
+        }
+        return {static_cast<size_t>(n), static_cast<int>(d)};
+    }
     throw std::runtime_error("no support file");
+}
+
+// Decode byte-valued datasets directly into the float buffer consumed by the
+// regular Index/IVF pipeline.  Conversion is chunked so no full-size uint8
+// shadow copy is retained alongside the float base.
+inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadByteXvecsAsFloat(
+    const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
+    const bool bvecs = filePath.ends_with(".bvecs");
+    const bool i8bin = filePath.ends_with(".i8bin");
+    if (!bvecs && !i8bin) {
+        throw std::runtime_error("Unsupported byte-vector file: " + filePath);
+    }
+    const auto [total, dimension] = loadXvecsInfo(filePath);
+    const size_t first = static_cast<size_t>(bounds.first);
+    const size_t last = bounds.second == 0 ? total : static_cast<size_t>(bounds.second);
+    if (first < 1 || last < first || last > total) {
+        throw std::out_of_range("Invalid vector bounds for " + filePath);
+    }
+    const size_t count = last - first + 1;
+    const size_t d = static_cast<size_t>(dimension);
+    auto output = std::make_unique<float[]>(count * d);
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file) throw std::runtime_error("Cannot open " + filePath);
+
+    constexpr size_t chunk_vectors = 8192;
+    const size_t stride = d + (bvecs ? sizeof(uint32_t) : 0);
+    const uint64_t header = i8bin ? 2 * sizeof(uint32_t) : 0;
+    file.seekg(static_cast<std::streamoff>(header + (first - 1) * stride), std::ios::beg);
+    std::vector<uint8_t> raw(chunk_vectors * stride);
+    for (size_t begin = 0; begin < count; begin += chunk_vectors) {
+        const size_t rows = std::min(chunk_vectors, count - begin);
+        const size_t bytes = rows * stride;
+        file.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(bytes));
+        if (!file) throw std::runtime_error("Truncated byte-vector file: " + filePath);
+        int invalid_dimension = 0;
+#pragma omp parallel for schedule(static) reduction(| : invalid_dimension)
+        for (size_t row = 0; row < rows; ++row) {
+            const uint8_t* source = raw.data() + row * stride;
+            if (bvecs) {
+                uint32_t stored_d = 0;
+                std::memcpy(&stored_d, source, sizeof(stored_d));
+                if (stored_d != d) {
+                    invalid_dimension = 1;
+                    continue;
+                }
+                source += sizeof(uint32_t);
+            }
+            float* destination = output.get() + (begin + row) * d;
+            if (i8bin) {
+                const int8_t* signed_source = reinterpret_cast<const int8_t*>(source);
+#pragma omp simd
+                for (size_t axis = 0; axis < d; ++axis) {
+                    destination[axis] = static_cast<float>(signed_source[axis]);
+                }
+            } else {
+#pragma omp simd
+                for (size_t axis = 0; axis < d; ++axis) {
+                    destination[axis] = static_cast<float>(source[axis]);
+                }
+            }
+        }
+        if (invalid_dimension) {
+            throw std::runtime_error("Mixed dimensions in bvecs file: " + filePath);
+        }
+    }
+    return {std::move(output), count, dimension};
+}
+
+// L2-normalize each row in-place. Zero vectors stay zero (skip).
+// On the unit sphere, ||x-q||^2 = 2-2 cos(x,q), so L2-IVF+MP prune is
+// cosine-equivalent when base and query are both normalized.
+inline void normalizeL2InPlace(float* data, size_t n, size_t d) {
+    if (data == nullptr || n == 0 || d == 0) return;
+    for (size_t i = 0; i < n; ++i) {
+        float* row = data + i * d;
+        float norm2 = 0.0f;
+        for (size_t j = 0; j < d; ++j) {
+            norm2 += row[j] * row[j];
+        }
+        if (norm2 <= 0.0f) continue;
+        const float inv = 1.0f / std::sqrt(norm2);
+        for (size_t j = 0; j < d; ++j) {
+            row[j] *= inv;
+        }
+    }
 }
 
 inline std::tuple<std::unique_ptr<float[]>, size_t, int> loadXvecs(const std::string& filePath, std::pair<int, int> bounds = {1, 0}) {
     if (filePath.ends_with(".fvecs")) {
         return loadFvecs(filePath, bounds);
-    } else if (filePath.ends_with(".bvecs")) {
-        return loadBvecs2Fvecs(filePath, bounds);
+    }
+    if (filePath.ends_with(".bvecs") || filePath.ends_with(".i8bin")) {
+        return loadByteXvecsAsFloat(filePath, bounds);
     }
     throw std::runtime_error("no support file");
 }
@@ -659,8 +747,26 @@ inline void loadResults(const std::string& filePath, idx_t* labels, float* dista
             std::cerr << std::format("Failed to open file: {}", filePath) << std::endl;
             return;
         }
+        inFile.seekg(0, std::ios::end);
+        const std::streamoff file_size = inFile.tellg();
+        inFile.seekg(0, std::ios::beg);
+        const size_t record_bytes = k * (sizeof(idx_t) + sizeof(float));
+        if (file_size < 0 || static_cast<size_t>(file_size) % record_bytes != 0) {
+            throw std::runtime_error("Corrupt result/groundtruth binary: " + filePath);
+        }
+        const size_t stored_nq = static_cast<size_t>(file_size) / record_bytes;
+        if (nq > stored_nq) {
+            throw std::runtime_error(
+                std::format("Requested nq={} exceeds stored nq={} in {}", nq, stored_nq, filePath));
+        }
+        // File layout is [all labels][all distances]. When loading a prefix of
+        // queries, distances start after the full label section, not after nq labels.
         inFile.read(reinterpret_cast<char*>(labels), nq * k * sizeof(idx_t));
+        inFile.seekg(static_cast<std::streamoff>(stored_nq * k * sizeof(idx_t)), std::ios::beg);
         inFile.read(reinterpret_cast<char*>(distances), nq * k * sizeof(float));
+        if (!inFile) {
+            throw std::runtime_error("Failed while reading result/groundtruth binary: " + filePath);
+        }
         inFile.close();
     }
 }
