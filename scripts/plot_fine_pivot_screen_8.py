@@ -49,6 +49,14 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("logs/fine_pivot_screen_8_20261004"),
     )
+    parser.add_argument(
+        "--dbpedia-stats",
+        type=Path,
+        help=(
+            "Complete DBpedia fine-pivot statistics CSV. When supplied, it "
+            "replaces the legacy P=128-only DBpedia stats point in the prune plot."
+        ),
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -134,13 +142,18 @@ def plot_latency(root: Path, summary: pd.DataFrame, output: Path) -> None:
     plt.close(fig)
 
 
-def stats_frame(root: Path, row: pd.Series) -> pd.DataFrame:
+def stats_frame(
+    root: Path, row: pd.Series, dbpedia_stats: Path | None = None
+) -> pd.DataFrame:
     dataset = row.dataset
     scope = row.scope
     frame = read_csvs(str(root / "stats" / dataset / f"{scope}_static_rep*.csv"))
     if dataset == "dbpedia1536m_holdout":
-        target = root / "stats" / dataset / "per_list_static_target_p128.csv"
-        frame = pd.read_csv(target) if target.exists() else pd.DataFrame()
+        if dbpedia_stats is not None:
+            frame = pd.read_csv(dbpedia_stats)
+        else:
+            target = root / "stats" / dataset / "per_list_static_target_p128.csv"
+            frame = pd.read_csv(target) if target.exists() else pd.DataFrame()
     if frame.empty:
         return frame
     frame = frame[frame.nprobe == int(row.nprobe)].copy()
@@ -151,10 +164,12 @@ def stats_frame(root: Path, row: pd.Series) -> pd.DataFrame:
     return frame
 
 
-def plot_pruning(root: Path, summary: pd.DataFrame, output: Path) -> None:
+def plot_pruning(
+    root: Path, summary: pd.DataFrame, output: Path, dbpedia_stats: Path | None = None
+) -> None:
     fig, axes = prepare_axes("Overall prune rate vs. pivot count")
     for ax, row in zip(axes, summary.itertuples(index=False)):
-        frame = stats_frame(root, row)
+        frame = stats_frame(root, row, dbpedia_stats)
         if not frame.empty:
             frame = frame.sort_values("pivot_count")
             ax.plot(
@@ -173,7 +188,11 @@ def plot_pruning(root: Path, summary: pd.DataFrame, output: Path) -> None:
                 zorder=5,
             )
         ax.set_ylim(0, 101)
-        suffix = " (target point only)" if row.dataset == "dbpedia1536m_holdout" else ""
+        suffix = (
+            " (target point only)"
+            if row.dataset == "dbpedia1536m_holdout" and dbpedia_stats is None
+            else ""
+        )
         ax.set_title(f"{DISPLAY[row.dataset]}{suffix}")
         ax.set_xlabel("Pivot count P (centroid included)")
         ax.set_ylabel("Overall prune rate (%)")
@@ -246,10 +265,13 @@ def main() -> None:
     root = args.input.resolve()
     output = (args.output or root / "figures").resolve()
     output.mkdir(parents=True, exist_ok=True)
+    dbpedia_stats = args.dbpedia_stats.resolve() if args.dbpedia_stats else None
+    if dbpedia_stats is not None and not dbpedia_stats.is_file():
+        parser.error(f"--dbpedia-stats does not exist: {dbpedia_stats}")
     summary = pd.read_csv(root / "fine_screen_summary.csv")
     plot_qps(root, summary, output)
     plot_latency(root, summary, output)
-    plot_pruning(root, summary, output)
+    plot_pruning(root, summary, output, dbpedia_stats)
     plot_speedup(summary, output)
     plot_stage_share(summary, output)
     plot_normalized_tradeoff(root, summary, output)
