@@ -13,9 +13,7 @@ add_library(Tribase STATIC ${SRC_FILES})
 
 target_link_libraries(Tribase PUBLIC OpenMP::OpenMP_CXX
                                     Eigen3::Eigen
-                                    mkl_intel_lp64
-                                    mkl_sequential
-                                    mkl_core)
+                                    MKL::MKL)
 
 add_executable(main main.cpp)
 target_link_libraries(main Tribase faiss)
