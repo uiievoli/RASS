@@ -137,8 +137,6 @@ def plot_qps(
         ax.fill_between(median.index, low, high, color="#2878b5", alpha=0.18)
         ax.plot(median.index, median, color="#2878b5", marker="o", ms=3, lw=2)
         ax.axvline(row.median_peak_p, color="#d62728", ls="--", lw=1.5)
-        if row.normalized_consensus_p != row.median_peak_p:
-            ax.axvline(row.normalized_consensus_p, color="#f28e2b", ls=":", lw=2)
         dyn = dynamic_row(dynamic, row.dataset)
         add_dynamic_marker(ax, dyn, "mean_active_pivots", "dynamic_qps_median")
         ax.set_title(
