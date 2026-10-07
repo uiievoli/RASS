@@ -16,6 +16,7 @@ ONLY_DATASETS="${ONLY_DATASETS:-}"
 DRY_RUN=0
 VERBOSE=0
 SKIP_PLOT=0
+BUILD_MISSING=0
 
 usage() {
   cat <<'EOF'
@@ -32,6 +33,8 @@ Options:
   --pivot-seed N        Must match existing Pmax indexes (default 20261005).
   --block-size N        Dynamic projection block size (default 2).
   --stats-bin PATH      ENABLE_STATS=ON query binary.
+  --build-missing       Build a missing rich PCA index. Reuses the matching
+                        Triangle/IVF index when present; otherwise builds fully.
   --skip-plot           Keep raw outputs without running the final analyzer.
   --verbose             Pass --verbose to query.
   --dry-run             Validate arguments and print commands.
@@ -55,6 +58,7 @@ while (($#)); do
     --pivot-seed) PIVOT_SEED="$2"; shift 2 ;;
     --block-size) BLOCK_SIZE="$2"; shift 2 ;;
     --stats-bin) STATS_BIN="$2"; shift 2 ;;
+    --build-missing) BUILD_MISSING=1; shift ;;
     --skip-plot) SKIP_PLOT=1; shift ;;
     --verbose) VERBOSE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -108,6 +112,18 @@ index_path() {
     "${PMAX[$dataset]}" "$PIVOT_SEED"
 }
 
+triangle_index_path() {
+  local root="$1" dataset="$2"
+  printf '%s/%s/index/v10_nlist_%s_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_per_list_pca_P0_seed%s.index\n' \
+    "$root" "$dataset" "${NLIST[$dataset]}" "$PIVOT_SEED"
+}
+
+baseline_index_path() {
+  local root="$1" dataset="$2"
+  printf '%s/%s/index/v10_nlist_%s_metric_l2_opt_0_subk_15_subNprobeRatio_1_mp_global_affine_fps_P0_seed0.index\n' \
+    "$root" "$dataset" "${NLIST[$dataset]}"
+}
+
 log() {
   local message="[$(date -Is)] $*"
   echo "$message"
@@ -159,6 +175,53 @@ if count == 0 or count != len(queries) * int(nprobe):
 PY
 }
 
+build_rich_index() {
+  local dataset="$1" root="$2" rich="$3" triangle baseline source logfile manifest
+  local -a command source_args=()
+  triangle="$(triangle_index_path "$root" "$dataset")"
+  baseline="$(baseline_index_path "$root" "$dataset")"
+  if [[ -s "$triangle" ]]; then
+    source="$triangle"
+    source_args=(--from_index "$source")
+  elif [[ -s "$baseline" ]]; then
+    source="$baseline"
+    source_args=(--from_index "$source")
+  else
+    source="none (full IVF build)"
+  fi
+  logfile="$LOG_DIR/index_build/$dataset.log"
+  manifest="$LOG_DIR/manifests/${dataset}_P${PMAX[$dataset]}_build.csv"
+  command=(
+    "$STATS_BIN" --benchmarks_path "$root" --dataset "$dataset"
+    --input_format fvecs --output_format bin --metric l2 --k 1
+    --nlist "${NLIST[$dataset]}" --nprobes "${NPROBE[$dataset]}"
+    --cache --signature_precision float32 --loop 1
+    --opt_levels OPT_TRIANGLE --multipivot_modes projection
+    --multipivot_scope "${SCOPE[$dataset]}" --multipivot_method pca
+    --pivot_counts "${PMAX[$dataset]}" --projection_block_size 0
+    --pivot_seed "$PIVOT_SEED" --pivot_manifest "$manifest"
+    --train_only "${source_args[@]}"
+  )
+  ((VERBOSE)) && command+=(--verbose)
+  log "BUILD $dataset rich_index=$rich source=$source"
+  if ((DRY_RUN)); then
+    run_bound "${command[@]}"
+    return
+  fi
+  mkdir -p "$LOG_DIR/index_build" "$LOG_DIR/manifests"
+  if run_bound "${command[@]}" >"$logfile.partial" 2>&1; then
+    [[ -s "$rich" ]] || {
+      log "FAILED build completed without expected index: $rich"; return 1;
+    }
+    mv "$logfile.partial" "$logfile"
+    log "BUILT $dataset rich_index=$rich"
+  else
+    local rc=$?
+    log "FAILED index build for $dataset rc=$rc; inspect $logfile.partial"
+    return "$rc"
+  fi
+}
+
 run_dataset() {
   local dataset="$1" root rich stats partial_stats visits partial_visits logfile manifest
   local -a command
@@ -177,8 +240,18 @@ run_dataset() {
 
   if ((!DRY_RUN)); then
     [[ -x "$STATS_BIN" ]] || { echo "Missing stats binary: $STATS_BIN" >&2; exit 1; }
-    [[ -s "$rich" ]] || { echo "Missing rich PCA index: $rich" >&2; exit 1; }
     mkdir -p "$LOG_DIR"/{stats,list_visits,logs,manifests,complete}
+  fi
+  if [[ ! -s "$rich" ]]; then
+    if ((BUILD_MISSING)); then
+      build_rich_index "$dataset" "$root" "$rich"
+    elif ((DRY_RUN)); then
+      log "MISSING rich PCA index (add --build-missing to build): $rich"
+    else
+      echo "Missing rich PCA index: $rich" >&2
+      echo "Rerun with --build-missing to upgrade a matching Triangle/IVF index." >&2
+      exit 1
+    fi
   fi
   command=(
     "$STATS_BIN" --benchmarks_path "$root" --dataset "$dataset"
