@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize dynamic-P runs aligned with the eight-dataset static-P sweep."""
+"""Summarize dynamic-P runs aligned with the active seven-dataset sweep."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ DATASETS = (
     "msong_holdout",
     "sift1m",
     "glove25",
-    "HandOutlines",
     "StarLightCurves",
     "dbpedia1536m_holdout",
 )

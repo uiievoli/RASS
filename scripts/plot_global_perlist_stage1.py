@@ -20,7 +20,7 @@ from matplotlib.lines import Line2D
 
 ORDER = [
     "nuswide", "fasion_mnist_784", "msong_holdout", "sift1m",
-    "glove25", "HandOutlines", "StarLightCurves", "dbpedia1536m_holdout",
+    "glove25", "StarLightCurves", "dbpedia1536m_holdout",
 ]
 DISPLAY = {
     "nuswide": "NUS-WIDE",
@@ -28,7 +28,6 @@ DISPLAY = {
     "msong_holdout": "MillionSong",
     "sift1m": "SIFT1M",
     "glove25": "GloVe-25",
-    "HandOutlines": "HandOutlines",
     "StarLightCurves": "StarLightCurves",
     "dbpedia1536m_holdout": "DBpedia-1536",
 }

@@ -14,17 +14,17 @@ import numpy as np
 
 ORDER = [
     "nuswide", "fasion_mnist_784", "msong_holdout", "sift1m",
-    "glove25", "HandOutlines", "StarLightCurves", "dbpedia1536m_holdout",
+    "glove25", "StarLightCurves", "dbpedia1536m_holdout",
 ]
 LABELS = {
     "nuswide": "NUS-WIDE", "fasion_mnist_784": "Fashion",
     "msong_holdout": "MillionSong", "sift1m": "SIFT1M",
-    "glove25": "GloVe25", "HandOutlines": "HandOutlines",
+    "glove25": "GloVe25",
     "StarLightCurves": "StarLight", "dbpedia1536m_holdout": "DBpedia1536",
 }
 FIXED_NPROBE = {
     "nuswide": 3, "fasion_mnist_784": 7, "msong_holdout": 30,
-    "sift1m": 50, "glove25": 50, "HandOutlines": 5,
+    "sift1m": 50, "glove25": 50,
     "StarLightCurves": 5, "dbpedia1536m_holdout": 10,
 }
 MODES = ["baseline", "triangle", "pca10", "static_best", "dynamic"]

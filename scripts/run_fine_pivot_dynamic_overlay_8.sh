@@ -25,7 +25,7 @@ usage() {
 Usage: scripts/run_fine_pivot_dynamic_overlay_8.sh [options]
 
 Options:
-  --data-root DIR       Root of the first seven datasets.
+  --data-root DIR       Root of the first six datasets.
   --dbpedia-root DIR    Root containing dbpedia1536m_holdout.
   --static-root DIR     Existing fine static-P experiment directory.
   --log-dir DIR         Dynamic supplement output directory.
@@ -33,7 +33,7 @@ Options:
   --threads N           OpenMP threads (default 32).
   --perf-repeats N      Independent perf runs (default 3).
   --phase NAME          all (default), perf, or stats.
-  --datasets LIST       Comma/space-separated subset of the eight datasets.
+  --datasets LIST       Comma/space-separated subset of the seven datasets.
   --pivot-seed N        Must match the rich indexes (default 20261005).
   --block-size N        Dynamic projection block size (default 2).
   --perf-bin PATH       ENABLE_STATS=OFF query binary.
@@ -48,7 +48,6 @@ The target nprobe, PCA scope and Pmax exactly match fine_screen_summary.csv:
   msong_holdout         per_list nprobe=16  Pmax=96
   sift1m                per_list nprobe=34  Pmax=40
   glove25               global   nprobe=50  Pmax=26
-  HandOutlines          global   nprobe=4   Pmax=64
   StarLightCurves       global   nprobe=4   Pmax=104
   dbpedia1536m_holdout  per_list nprobe=160 Pmax=256
 
@@ -92,26 +91,26 @@ done
 }
 command -v taskset >/dev/null || { echo "taskset is required" >&2; exit 1; }
 
-DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 HandOutlines StarLightCurves dbpedia1536m_holdout)
+DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves dbpedia1536m_holdout)
 declare -A NLIST=(
   [nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000 [sift1m]=1000
-  [glove25]=1024 [HandOutlines]=32 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000
+  [glove25]=1024 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000
 )
 declare -A NPROBE=(
   [nuswide]=3 [fasion_mnist_784]=7 [msong_holdout]=16 [sift1m]=34
-  [glove25]=50 [HandOutlines]=4 [StarLightCurves]=4 [dbpedia1536m_holdout]=160
+  [glove25]=50 [StarLightCurves]=4 [dbpedia1536m_holdout]=160
 )
 declare -A PMAX=(
   [nuswide]=32 [fasion_mnist_784]=96 [msong_holdout]=96 [sift1m]=40
-  [glove25]=26 [HandOutlines]=64 [StarLightCurves]=104 [dbpedia1536m_holdout]=256
+  [glove25]=26 [StarLightCurves]=104 [dbpedia1536m_holdout]=256
 )
 declare -A SCOPE=(
   [nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list [sift1m]=per_list
-  [glove25]=global [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=per_list
+  [glove25]=global [StarLightCurves]=global [dbpedia1536m_holdout]=per_list
 )
 declare -A PERF_LOOPS=(
   [nuswide]=50 [fasion_mnist_784]=10 [msong_holdout]=5 [sift1m]=2
-  [glove25]=10 [HandOutlines]=100 [StarLightCurves]=50 [dbpedia1536m_holdout]=1
+  [glove25]=10 [StarLightCurves]=50 [dbpedia1536m_holdout]=1
 )
 
 selected() {
@@ -186,7 +185,6 @@ expected = {
     "msong_holdout": (16, "per_list"),
     "sift1m": (34, "per_list"),
     "glove25": (50, "global"),
-    "HandOutlines": (4, "global"),
     "StarLightCurves": (4, "global"),
     "dbpedia1536m_holdout": (160, "per_list"),
 }
@@ -298,7 +296,7 @@ if ((!DRY_RUN)); then
     python3 "$ROOT/scripts/summarize_fine_pivot_dynamic_overlay_8.py" \
       --input-root "$LOG_DIR" --static-root "$STATIC_ROOT"
   else
-    log "SUMMARY deferred until all eight datasets have perf and stats outputs"
+    log "SUMMARY deferred until all seven datasets have perf and stats outputs"
   fi
 fi
 log "COMPLETE results=$LOG_DIR"

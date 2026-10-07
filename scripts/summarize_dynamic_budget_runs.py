@@ -14,7 +14,6 @@ DATASET_ORDER = [
     "msong_holdout",
     "sift1m",
     "glove25",
-    "HandOutlines",
     "StarLightCurves",
     "dbpedia1536m_holdout",
 ]

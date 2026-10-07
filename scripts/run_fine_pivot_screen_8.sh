@@ -20,7 +20,7 @@ DRY_RUN=0
 usage() {
   cat <<'EOF'
 Usage: scripts/run_fine_pivot_screen_8.sh [options]
-  --data-root DIR       Root of the first seven datasets.
+  --data-root DIR       Root of the first six datasets.
   --dbpedia-root DIR    Root containing dbpedia1536m_holdout.
   --log-dir DIR         Output directory.
   --cpus LIST           taskset CPU list (default 0-31).
@@ -53,16 +53,16 @@ done
 [[ "$PHASE" =~ ^(all|perf|stats)$ ]] || { echo "invalid --phase" >&2; exit 2; }
 [[ -x "$PERF_BIN" && -x "$STATS_BIN" ]] || { echo "query binaries are missing" >&2; exit 1; }
 
-DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 HandOutlines StarLightCurves dbpedia1536m_holdout)
+DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves dbpedia1536m_holdout)
 declare -A NLIST=(
   [nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000 [sift1m]=1000
-  [glove25]=1024 [HandOutlines]=32 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000
+  [glove25]=1024 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000
 )
 # These brackets contain the expected first Recall >= 0.99 point and nearby points.
 declare -A NPROBES=(
   [nuswide]="2 3" [fasion_mnist_784]="5 6 7"
   [msong_holdout]="10 12 14 16 18 20" [sift1m]="30 32 34 36"
-  [glove25]="40 45 50" [HandOutlines]="3 4 5"
+  [glove25]="40 45 50"
   [StarLightCurves]="3 4 5" [dbpedia1536m_holdout]="150 160 175 200"
 )
 declare -A P_VALUES=(
@@ -71,14 +71,13 @@ declare -A P_VALUES=(
   [msong_holdout]="4 8 12 16 $(seq -s ' ' 20 2 80) 84 88 92 96"
   [sift1m]="$(seq -s ' ' 2 40)"
   [glove25]="$(seq -s ' ' 2 26)"
-  [HandOutlines]="$(seq -s ' ' 2 32) 40 48 56 64"
   [StarLightCurves]="$(seq -s ' ' 4 2 104)"
   [dbpedia1536m_holdout]="4 8 16 32 $(seq -s ' ' 48 4 256)"
 )
 # One prefix run evaluates many configurations, so use lower per-row loops here.
 declare -A PERF_LOOPS=(
   [nuswide]=50 [fasion_mnist_784]=10 [msong_holdout]=5 [sift1m]=2
-  [glove25]=10 [HandOutlines]=100 [StarLightCurves]=50 [dbpedia1536m_holdout]=1
+  [glove25]=10 [StarLightCurves]=50 [dbpedia1536m_holdout]=1
 )
 
 selected() {
@@ -139,7 +138,7 @@ run_phase_dataset() {
   triangle="$(index_path "$root" "$ds" 1 per_list pca 0 "$PIVOT_SEED")"
   local -a active; read -r -a active <<<"${P_VALUES[$ds]}"; pmax="${active[-1]}"
   local -a scopes=(per_list)
-  case "$ds" in glove25|HandOutlines|StarLightCurves) scopes=(global);; nuswide) scopes=(global per_list);; esac
+  case "$ds" in glove25|StarLightCurves) scopes=(global);; nuswide) scopes=(global per_list);; esac
   for ((rep=1; rep<=repeats; ++rep)); do
     run_case "$phase" "$ds" baseline "$rep" 0 "$baseline" --opt_levels OPT_NONE --multipivot_modes none --multipivot_scope global --multipivot_method affine_fps --pivot_counts 0
     run_case "$phase" "$ds" triangle "$rep" 1 "$triangle" --opt_levels OPT_TRIANGLE --multipivot_modes none --multipivot_scope per_list --multipivot_method pca --pivot_counts 1 --pivot_seed "$PIVOT_SEED" --from_index "$baseline"

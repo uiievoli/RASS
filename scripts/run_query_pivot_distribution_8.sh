@@ -23,7 +23,7 @@ usage() {
 Usage: scripts/run_query_pivot_distribution_8.sh [options]
 
 Options:
-  --data-root DIR       Root of the first seven datasets.
+  --data-root DIR       Root of the first six datasets.
   --dbpedia-root DIR    Root containing dbpedia1536m_holdout.
   --static-root DIR     Fine static-P result root (for oracle markers).
   --log-dir DIR         Raw visits, query summaries and figure output root.
@@ -77,22 +77,22 @@ done
 }
 command -v taskset >/dev/null || { echo "taskset is required" >&2; exit 1; }
 
-DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 HandOutlines StarLightCurves dbpedia1536m_holdout)
+DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves dbpedia1536m_holdout)
 declare -A NLIST=(
   [nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000 [sift1m]=1000
-  [glove25]=1024 [HandOutlines]=32 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000
+  [glove25]=1024 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000
 )
 declare -A NPROBE=(
   [nuswide]=3 [fasion_mnist_784]=7 [msong_holdout]=16 [sift1m]=34
-  [glove25]=50 [HandOutlines]=4 [StarLightCurves]=4 [dbpedia1536m_holdout]=160
+  [glove25]=50 [StarLightCurves]=4 [dbpedia1536m_holdout]=160
 )
 declare -A PMAX=(
   [nuswide]=32 [fasion_mnist_784]=96 [msong_holdout]=96 [sift1m]=40
-  [glove25]=26 [HandOutlines]=64 [StarLightCurves]=104 [dbpedia1536m_holdout]=256
+  [glove25]=26 [StarLightCurves]=104 [dbpedia1536m_holdout]=256
 )
 declare -A SCOPE=(
   [nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list [sift1m]=per_list
-  [glove25]=global [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=per_list
+  [glove25]=global [StarLightCurves]=global [dbpedia1536m_holdout]=per_list
 )
 
 selected() {

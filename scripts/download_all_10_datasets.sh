@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download the ten datasets used by scripts/run_all_10_datasets.sh.
+# Download the eight active datasets used by scripts/run_all_8_datasets.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,28 +13,27 @@ TRIBASE_BUNDLE_ID="${TRIBASE_BUNDLE_ID:-12wFLDNStJU02pEn7VcAs00LyS7uzcAbl}"
 DBPEDIA_REPO="${DBPEDIA_REPO:-Qdrant/dbpedia-entities-openai3-text-embedding-3-large-1536-1M}"
 BIGANN_REPO="${BIGANN_REPO:-jkhe/bigann}"
 HF_ENDPOINT="${HF_ENDPOINT:-https://huggingface.co}"
-SPACEV_BASE_URL="${SPACEV_BASE_URL:-https://bigger-ann.s3.amazonaws.com/spacev-1b}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/download_all_10_datasets.sh --data-root DIR [options]
+  scripts/download_all_8_datasets.sh --data-root DIR [options]
 
 Options:
   --data-root DIR       Final Tribase dataset root (required).
   --raw-dir DIR         Archive/raw download root; default DATA_ROOT/.downloads.
-  --datasets LIST       Comma/space-separated subset of the ten datasets.
+  --datasets LIST       Comma/space-separated subset of the eight datasets.
   --dry-run             Print download and preparation commands only.
   -h, --help            Show this help.
 
 Dataset names:
-  nuswide fasion_mnist_784 msong_holdout sift1m glove25 HandOutlines
-  StarLightCurves dbpedia1536m_holdout sift1b spacev1b
+  nuswide fasion_mnist_784 msong_holdout sift1m glove25
+  StarLightCurves dbpedia1536m_holdout sift1b
 
-The first seven datasets are extracted as ready-to-use fvecs. DBpedia is
+The first six datasets are extracted as ready-to-use fvecs. DBpedia is
 downloaded from Hugging Face Parquet and prepared as a disjoint fvecs holdout.
-SIFT1B and SpaceV stay in their original integer formats on disk. query.cpp
-decodes them to float in RAM and builds the same float Index as other datasets.
+SIFT1B stays in its original integer format on disk. query.cpp decodes it to
+float in RAM and builds the same float Index as the other datasets.
 
 Dependencies:
   curl, unzip, tar, gzip, gdown, and Python numpy+pyarrow.
@@ -57,9 +56,9 @@ done
 RAW_DIR="${RAW_DIR:-${DATA_ROOT}/.downloads}"
 
 BUNDLE_DATASETS=(
-  nuswide fasion_mnist_784 msong_holdout sift1m glove25 HandOutlines StarLightCurves
+  nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves
 )
-ALL_DATASETS=("${BUNDLE_DATASETS[@]}" dbpedia1536m_holdout sift1b spacev1b)
+ALL_DATASETS=("${BUNDLE_DATASETS[@]}" dbpedia1536m_holdout sift1b)
 
 selected() {
   local needle="$1"
@@ -168,7 +167,7 @@ if ((bundle_needed)); then
     run unzip -n "${bundle_zip}" -d "${bundle_extract}"
     run touch "${bundle_marker}"
   fi
-  for dataset in nuswide fasion_mnist_784 sift1m glove25 HandOutlines StarLightCurves; do
+  for dataset in nuswide fasion_mnist_784 sift1m glove25 StarLightCurves; do
     selected "${dataset}" || continue
     target="${DATA_ROOT}/${dataset}/origin"
     if [[ -s "${target}/${dataset}_base.fvecs" && -s "${target}/${dataset}_query.fvecs" ]]; then
@@ -280,23 +279,9 @@ if selected sift1b; then
     "${DATA_ROOT}/sift1b/origin/sift1b_query.bvecs"
 fi
 
-if selected spacev1b; then
-  need curl
-  space_raw="${DATA_ROOT}/spacev1b/raw"
-  download "${SPACEV_BASE_URL}/base.1B.i8bin" "${space_raw}/base.1B.i8bin"
-  download "${SPACEV_BASE_URL}/query.30K.i8bin" "${space_raw}/query.30K.i8bin"
-  download "${SPACEV_BASE_URL}/groundtruth.30K.i32bin" "${space_raw}/groundtruth.30K.i32bin"
-  download "${SPACEV_BASE_URL}/groundtruth.30K.f32bin" "${space_raw}/groundtruth.30K.f32bin"
-  run mkdir -p "${DATA_ROOT}/spacev1b/origin"
-  run ln -sfn ../raw/base.1B.i8bin \
-    "${DATA_ROOT}/spacev1b/origin/spacev1b_base.i8bin"
-  run ln -sfn ../raw/query.30K.i8bin \
-    "${DATA_ROOT}/spacev1b/origin/spacev1b_query.i8bin"
-fi
-
 if ((!DRY_RUN)); then
   failed=0
-  for dataset in nuswide fasion_mnist_784 msong_holdout sift1m glove25 HandOutlines StarLightCurves dbpedia1536m_holdout; do
+  for dataset in nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves dbpedia1536m_holdout; do
     selected "${dataset}" || continue
     for path in \
       "${DATA_ROOT}/${dataset}/origin/${dataset}_base.fvecs" \
@@ -315,16 +300,6 @@ if ((!DRY_RUN)); then
       "${DATA_ROOT}/sift1b/origin/sift1b_base.bvecs" \
       "${DATA_ROOT}/sift1b/origin/sift1b_query.bvecs"; do
       [[ -s "${path}" ]] || { echo "INCOMPLETE SIFT1B file: ${path}" >&2; failed=1; }
-    done
-  fi
-  if selected spacev1b; then
-    for path in \
-      "${DATA_ROOT}/spacev1b/raw/base.1B.i8bin" \
-      "${DATA_ROOT}/spacev1b/raw/query.30K.i8bin" \
-      "${DATA_ROOT}/spacev1b/raw/groundtruth.30K.i32bin" \
-      "${DATA_ROOT}/spacev1b/origin/spacev1b_base.i8bin" \
-      "${DATA_ROOT}/spacev1b/origin/spacev1b_query.i8bin"; do
-      [[ -s "${path}" ]] || { echo "INCOMPLETE SpaceV file: ${path}" >&2; failed=1; }
     done
   fi
   ((failed == 0)) || exit 1

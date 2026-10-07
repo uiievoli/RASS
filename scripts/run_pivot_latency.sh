@@ -15,7 +15,6 @@ DATASETS=(
   msong_holdout
   sift1m
   glove25
-  HandOutlines
   StarLightCurves
 )
 # Optional shell override, for example: ONLY_DATASETS="sift1m glove25".
@@ -29,7 +28,6 @@ declare -A DIMENSIONS=(
   [msong_holdout]=420
   [sift1m]=128
   [glove25]=25
-  [HandOutlines]=2710
   [StarLightCurves]=1025
 )
 
@@ -39,7 +37,6 @@ declare -A NLISTS=(
   [msong_holdout]=1000
   [sift1m]=1000
   [glove25]=1024
-  [HandOutlines]=32
   [StarLightCurves]=128
 )
 
@@ -50,7 +47,6 @@ declare -A NPROBES=(
   [msong_holdout]=30
   [sift1m]=50
   [glove25]=50
-  [HandOutlines]=5
   [StarLightCurves]=5
 )
 
@@ -60,7 +56,6 @@ declare -A SCOPES=(
   [msong_holdout]=per_list
   [sift1m]=per_list
   [glove25]=per_list
-  [HandOutlines]=global
   [StarLightCurves]=global
 )
 
@@ -72,7 +67,6 @@ declare -A PIVOTS=(
   [msong_holdout]="1 4 16 64"
   [sift1m]="1 4 16"
   [glove25]="1 4"
-  [HandOutlines]="1 4 16 64 128 256 512"
   [StarLightCurves]="1 4 16 64 128"
 )
 
@@ -83,7 +77,6 @@ declare -A PERF_REPEATS=(
   [msong_holdout]=20
   [sift1m]=10
   [glove25]=20
-  [HandOutlines]=100
   [StarLightCurves]=100
 )
 # ---------------------------------------------------------------------------

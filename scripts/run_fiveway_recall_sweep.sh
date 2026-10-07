@@ -9,28 +9,27 @@ DB_ROOT="${DBPEDIA_ROOT:-/mnt/nvme/wxy}"
 OUT_ROOT="${OUT_ROOT:-${ROOT}/logs/fiveway-recall-$(date +%Y%m%d-%H%M%S)}"
 THREADS="${THREADS:-32}"
 
-DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 HandOutlines StarLightCurves dbpedia1536m_holdout)
+DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves dbpedia1536m_holdout)
 declare -A ROOTS=(
   [nuswide]="${OLD_ROOT}" [fasion_mnist_784]="${OLD_ROOT}" [msong_holdout]="${OLD_ROOT}"
-  [sift1m]="${OLD_ROOT}" [glove25]="${OLD_ROOT}" [HandOutlines]="${OLD_ROOT}"
+  [sift1m]="${OLD_ROOT}" [glove25]="${OLD_ROOT}"
   [StarLightCurves]="${OLD_ROOT}" [dbpedia1536m_holdout]="${DB_ROOT}"
 )
-declare -A NLIST=([nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000 [sift1m]=1000 [glove25]=1024 [HandOutlines]=32 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000)
+declare -A NLIST=([nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000 [sift1m]=1000 [glove25]=1024 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000)
 declare -A NPROBES=(
   [nuswide]="1 2 3 5 8 16"
   [fasion_mnist_784]="1 3 5 7 10 20"
   [msong_holdout]="1 3 5 10 20 30 50 100"
   [sift1m]="1 5 10 20 30 50 70 100"
   [glove25]="1 5 10 20 30 50 70 100"
-  [HandOutlines]="1 2 3 5 7 10"
   [StarLightCurves]="1 2 3 5 7 10"
   [dbpedia1536m_holdout]="1 3 5 10 20"
 )
-declare -A PCA_P=([nuswide]=50 [fasion_mnist_784]=64 [msong_holdout]=42 [sift1m]=16 [glove25]=8 [HandOutlines]=271 [StarLightCurves]=103 [dbpedia1536m_holdout]=128)
-declare -A PCA_SCOPE=([nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list [sift1m]=per_list [glove25]=per_list [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=global)
-declare -A BEST_P=([nuswide]=2 [fasion_mnist_784]=48 [msong_holdout]=34 [sift1m]=23 [glove25]=14 [HandOutlines]=7 [StarLightCurves]=18 [dbpedia1536m_holdout]=128)
-declare -A BEST_SCOPE=([nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list [sift1m]=per_list [glove25]=global [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=per_list)
-declare -A LOOPS=([nuswide]=20 [fasion_mnist_784]=1 [msong_holdout]=1 [sift1m]=1 [glove25]=1 [HandOutlines]=50 [StarLightCurves]=20 [dbpedia1536m_holdout]=1)
+declare -A PCA_P=([nuswide]=50 [fasion_mnist_784]=64 [msong_holdout]=42 [sift1m]=16 [glove25]=8 [StarLightCurves]=103 [dbpedia1536m_holdout]=128)
+declare -A PCA_SCOPE=([nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list [sift1m]=per_list [glove25]=per_list [StarLightCurves]=global [dbpedia1536m_holdout]=global)
+declare -A BEST_P=([nuswide]=2 [fasion_mnist_784]=48 [msong_holdout]=34 [sift1m]=23 [glove25]=14 [StarLightCurves]=18 [dbpedia1536m_holdout]=128)
+declare -A BEST_SCOPE=([nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list [sift1m]=per_list [glove25]=global [StarLightCurves]=global [dbpedia1536m_holdout]=per_list)
+declare -A LOOPS=([nuswide]=20 [fasion_mnist_784]=1 [msong_holdout]=1 [sift1m]=1 [glove25]=1 [StarLightCurves]=20 [dbpedia1536m_holdout]=1)
 
 mkdir -p "${OUT_ROOT}"/{csv,logs,manifests}
 echo "[$(date -Is)] output=${OUT_ROOT}" | tee "${OUT_ROOT}/run.log"

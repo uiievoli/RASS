@@ -15,7 +15,6 @@ DATASET_ORDER = (
     "msong_holdout",
     "sift1m",
     "glove25",
-    "HandOutlines",
     "StarLightCurves",
 )
 
@@ -25,7 +24,6 @@ DISPLAY_NAMES = {
     "msong_holdout": "MillionSong",
     "sift1m": "SIFT1M",
     "glove25": "GloVe-25",
-    "HandOutlines": "HandOutlines",
     "StarLightCurves": "StarLightCurves",
 }
 

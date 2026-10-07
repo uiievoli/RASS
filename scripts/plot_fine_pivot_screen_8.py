@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot the eight-dataset fine static-PCA prefix experiment."""
+"""Plot the active seven-dataset fine static-PCA prefix experiment."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ DISPLAY = {
     "msong_holdout": "MillionSong",
     "sift1m": "SIFT1M",
     "glove25": "GloVe25",
-    "HandOutlines": "HandOutlines",
     "StarLightCurves": "StarLightCurves",
     "dbpedia1536m_holdout": "DBpedia",
 }
@@ -36,7 +35,6 @@ DIMENSIONS = {
     "msong_holdout": 420,
     "sift1m": 128,
     "glove25": 25,
-    "HandOutlines": 270,
     "StarLightCurves": 1024,
     "dbpedia1536m_holdout": 1536,
 }
@@ -327,6 +325,9 @@ def main() -> None:
         )
     dynamic = pd.read_csv(args.dynamic_summary) if args.dynamic_summary else None
     summary = pd.read_csv(root / "fine_screen_summary.csv")
+    summary = summary[summary.dataset.isin(DISPLAY)].reset_index(drop=True)
+    if dynamic is not None:
+        dynamic = dynamic[dynamic.dataset.isin(DISPLAY)].reset_index(drop=True)
     plot_qps(root, summary, output, dynamic)
     plot_latency(root, summary, output, dynamic)
     plot_pruning(root, summary, output, dbpedia_stats, dynamic)

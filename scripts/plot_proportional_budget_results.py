@@ -19,7 +19,6 @@ LABELS = {
     "msong_holdout": "MillionSong",
     "sift1m": "SIFT1M",
     "glove25": "GloVe25",
-    "HandOutlines": "HandOutlines",
     "StarLightCurves": "StarLight",
     "dbpedia1536m_holdout": "DBpedia1536",
 }
@@ -27,7 +26,10 @@ LABELS = {
 
 def load_rows(path: Path):
     with path.open(newline="") as stream:
-        rows = list(csv.DictReader(stream))
+        rows = [
+            row for row in csv.DictReader(stream)
+            if row.get("dataset") not in {"HandOutlines", "spacev1b"}
+        ]
     numeric = [
         "pivot_count", "fixed_qps_median", "dynamic_qps_median", "speedup_median",
         "speedup_min", "speedup_max", "fixed_latency_ms", "dynamic_latency_ms",

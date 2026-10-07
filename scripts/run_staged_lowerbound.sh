@@ -13,30 +13,30 @@ OMP_PLACES_VALUE="${OMP_PLACES_VALUE:-cores}"
 REPEATS="${REPEATS:-3}"
 STAGE_STRIDES="${STAGE_STRIDES:-0 1 2 4 8 16}"
 
-DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 HandOutlines StarLightCurves)
+DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves)
 if [[ -n "${ONLY_DATASETS:-}" ]]; then
   read -r -a DATASETS <<<"${ONLY_DATASETS}"
 fi
 
 declare -A NLIST=(
   [nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000
-  [sift1m]=1000 [glove25]=1024 [HandOutlines]=32 [StarLightCurves]=128
+  [sift1m]=1000 [glove25]=1024 [StarLightCurves]=128
 )
 declare -A NPROBE=(
   [nuswide]=3 [fasion_mnist_784]=7 [msong_holdout]=30
-  [sift1m]=50 [glove25]=50 [HandOutlines]=5 [StarLightCurves]=5
+  [sift1m]=50 [glove25]=50 [StarLightCurves]=5
 )
 declare -A PIVOTS=(
   [nuswide]=2 [fasion_mnist_784]=48 [msong_holdout]=34
-  [sift1m]=23 [glove25]=14 [HandOutlines]=7 [StarLightCurves]=18
+  [sift1m]=23 [glove25]=14 [StarLightCurves]=18
 )
 declare -A SCOPE=(
   [nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list
-  [sift1m]=per_list [glove25]=global [HandOutlines]=global [StarLightCurves]=global
+  [sift1m]=per_list [glove25]=global [StarLightCurves]=global
 )
 declare -A LOOPS=(
   [nuswide]=100 [fasion_mnist_784]=4 [msong_holdout]=4
-  [sift1m]=2 [glove25]=3 [HandOutlines]=200 [StarLightCurves]=100
+  [sift1m]=2 [glove25]=3 [StarLightCurves]=100
 )
 
 mkdir -p "${OUT_ROOT}"/{csv,logs,manifests}

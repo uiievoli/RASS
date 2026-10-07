@@ -23,12 +23,12 @@ SCOPE = LOGS / "pivot-scope-supplement-20260914-165400"
 
 ORDER = [
     "nuswide", "fasion_mnist_784", "msong_holdout", "sift1m",
-    "glove25", "HandOutlines", "StarLightCurves",
+    "glove25", "StarLightCurves",
 ]
 NAMES = {
     "nuswide": "NUS-WIDE", "fasion_mnist_784": "Fashion-MNIST",
     "msong_holdout": "MillionSong", "sift1m": "SIFT1M",
-    "glove25": "GloVe-25", "HandOutlines": "HandOutlines",
+    "glove25": "GloVe-25",
     "StarLightCurves": "StarLightCurves",
 }
 
@@ -131,14 +131,6 @@ def recommended_rows(scope):
     ]:
         row = scope[(scope.dataset == dataset) & (scope.scope == chosen_scope)].iloc[0]
         rec.append(row.to_dict())
-    srows = read_csv(SCOPE / "summary.csv")
-    hand = [r for r in srows if r["dataset"] == "HandOutlines"]
-    hb = next(r for r in hand if int(r["pivot_count"]) == 1)
-    hr = next(r for r in hand if int(r["pivot_count"]) == 4)
-    rec.append({"dataset": "HandOutlines", "scope": "global", "P": 4,
-                "latency_ms": float(hr["latency_ms"]),
-                "speedup": float(hb["latency_ms"]) / float(hr["latency_ms"]),
-                "pruning": float(hr["overall_prune_pct"])})
     prows = read_csv(PIVOT / "analysis.csv")
     star = [r for r in prows if r["dataset"] == "StarLightCurves"]
     sr = min(star, key=lambda r: float(r["latency_ms"]))
@@ -274,7 +266,7 @@ def plot_history():
                 best = min(rows, key=lambda r: float(r["latency_ms"]))
                 records.append((stage, path.parent.name, float(best["latency_ms"])))
     df = pd.DataFrame(records, columns=["stage", "dataset", "latency"])
-    datasets = [d for d in ("nuswide", "glove25", "HandOutlines", "sift1m") if d in set(df.dataset)]
+    datasets = [d for d in ("nuswide", "glove25", "sift1m") if d in set(df.dataset)]
     fig, axes = plt.subplots(2, 2, figsize=(13, 8), constrained_layout=True)
     for ax, dataset in zip(axes.flat, datasets):
         part = df[df.dataset == dataset].set_index("stage")

@@ -37,7 +37,7 @@ Options:
   --cpus LIST           taskset CPU list, e.g. 0-31 or 0-15,32-47.
   --threads N           OpenMP threads; defaults to the bound CPU count.
   --phase NAME          all (default), perf, or stats.
-  --datasets LIST       Comma/space-separated subset of the eight datasets.
+  --datasets LIST       Comma/space-separated subset of the seven datasets.
   --perf-repeats N      Independent performance processes (default 3).
   --pivot-seed N        PCA seed and cache namespace (default 20261004).
   --verbose             Pass --verbose to query.
@@ -92,12 +92,12 @@ DBPEDIA_ROOT="${DBPEDIA_ROOT:-${DATA_ROOT}}"
 
 DATASETS=(
   nuswide fasion_mnist_784 msong_holdout sift1m glove25
-  HandOutlines StarLightCurves dbpedia1536m_holdout
+  StarLightCurves dbpedia1536m_holdout
 )
 
 declare -A NLIST=(
   [nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000 [sift1m]=1000
-  [glove25]=1024 [HandOutlines]=32 [StarLightCurves]=128
+  [glove25]=1024 [StarLightCurves]=128
   [dbpedia1536m_holdout]=1000
 )
 
@@ -108,7 +108,6 @@ declare -A NPROBES=(
   [msong_holdout]="6 10 20"
   [sift1m]="9 20 30"
   [glove25]="8 20 50"
-  [HandOutlines]="2 3 5"
   [StarLightCurves]="3 5"
   [dbpedia1536m_holdout]="14 30 75 150"
 )
@@ -120,7 +119,6 @@ declare -A P_VALUES=(
   [msong_holdout]="4 8 16 32 42 64"
   [sift1m]="4 8 16 24"
   [glove25]="2 4 8 16 25"
-  [HandOutlines]="4 16 64 128 271"
   [StarLightCurves]="4 16 32 64 103"
   [dbpedia1536m_holdout]="4 16 32 64 128"
 )
@@ -128,7 +126,7 @@ declare -A P_VALUES=(
 # Make every timed query command long enough to suppress scheduler noise.
 declare -A PERF_LOOPS=(
   [nuswide]=500 [fasion_mnist_784]=50 [msong_holdout]=20 [sift1m]=5
-  [glove25]=10 [HandOutlines]=500 [StarLightCurves]=200
+  [glove25]=10 [StarLightCurves]=200
   [dbpedia1536m_holdout]=1
 )
 

@@ -20,7 +20,7 @@ DRY_RUN=0
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/download_and_run_all_10_datasets.sh \
+  scripts/download_and_run_all_8_datasets.sh \
     --data-root DIR --log-dir DIR --cpus LIST [options]
 
 Options:
@@ -30,20 +30,20 @@ Options:
   --cpus LIST           taskset CPU list, e.g. 0-31 or 0-15,32-47.
   --threads N           Defaults to the number of CPUs in the binding.
   --build-batch-vectors N
-                        SIFT1B/SpaceV decoded build batch (default 262144).
+                        SIFT1B decoded build batch (default 262144).
   --coarse-hnsw-m N     HNSW coarse graph degree (default 32).
   --coarse-hnsw-ef-construction N
                         HNSW construction breadth (default 200).
   --coarse-hnsw-ef-search N
                         HNSW assignment breadth (default 128).
   --phase NAME          all (default), perf, or stats.
-  --datasets LIST       Comma/space-separated subset of the ten datasets.
+  --datasets LIST       Comma/space-separated subset of the eight datasets.
   --skip-build          Require existing build-perf/build-stats binaries.
   --dry-run             Print every download, build and experiment command.
   -h, --help            Show this help.
 
-SIFT1B and SpaceV remain byte-coded on disk, then query.cpp decodes them into
-RAM and uses the same float Index/IVF search path as the other datasets.
+SIFT1B remains byte-coded on disk, then query.cpp decodes it into RAM and uses
+the same float Index/IVF search path as the other datasets.
 EOF
 }
 
@@ -88,7 +88,7 @@ if ((!DRY_RUN)); then
 fi
 
 download_args=(
-  "${ROOT}/scripts/download_all_10_datasets.sh"
+  "${ROOT}/scripts/download_all_8_datasets.sh"
   --data-root "${DATA_ROOT}" --raw-dir "${RAW_DIR}"
 )
 [[ -n "${ONLY_DATASETS}" ]] && download_args+=(--datasets "${ONLY_DATASETS}")
@@ -126,7 +126,7 @@ if ((DRY_RUN)); then "${download_args[@]}"; else run "${download_args[@]}"; fi
 
 echo "[$(date -Is)] EXPERIMENT"
 experiment_args=(
-  "${ROOT}/scripts/run_all_10_datasets.sh"
+  "${ROOT}/scripts/run_all_8_datasets.sh"
   --data-root "${DATA_ROOT}" --log-dir "${LOG_DIR}"
   --cpus "${CPU_SET}" --threads "${THREADS}"
   --build-batch-vectors "${BUILD_BATCH_VECTORS}"

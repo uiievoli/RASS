@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot all-ten recall/latency/QPS/pruning results, restricted to recall > 0.9."""
+"""Plot the active eight-dataset results, restricted to recall > 0.9."""
 
 from __future__ import annotations
 
@@ -19,11 +19,9 @@ DATASETS = [
     "msong_holdout",
     "sift1m",
     "glove25",
-    "HandOutlines",
     "StarLightCurves",
     "dbpedia1536m_holdout",
     "sift1b",
-    "spacev1b",
 ]
 
 DISPLAY = {
@@ -32,11 +30,9 @@ DISPLAY = {
     "msong_holdout": "MillionSong",
     "sift1m": "SIFT1M",
     "glove25": "GloVe-25",
-    "HandOutlines": "HandOutlines",
     "StarLightCurves": "StarLightCurves",
     "dbpedia1536m_holdout": "DBpedia-1536",
     "sift1b": "SIFT1B",
-    "spacev1b": "SpaceV-1B",
 }
 
 METHODS = ["baseline", "triangle", "pca10", "static_best", "dynamic"]
@@ -62,6 +58,8 @@ MARKER = {
     "dynamic": "P",
 }
 
+LARGE_RECALL_AT = {"sift1b": 10}
+
 
 def number(row: dict[str, str], key: str, default: float = math.nan) -> float:
     try:
@@ -76,7 +74,28 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(stream))
 
 
-def load_perf(root: Path) -> dict[str, dict[str, list[dict[str, float]]]]:
+def perf_row(row: dict[str, str]) -> dict[str, float] | None:
+    recall = number(row, "recall")
+    if not recall > 0.9:
+        return None
+    qps = number(row, "qps")
+    latency = number(row, "latency_ms")
+    if not math.isfinite(latency) and qps > 0:
+        latency = 1000.0 / qps
+    return {
+        "nprobe": number(row, "nprobe"),
+        "recall": recall,
+        "qps": qps,
+        "latency_ms": latency,
+        "prune_rate": math.nan,
+    }
+
+
+def load_perf(
+    root: Path,
+    sift1b_root: Path | None = None,
+    sift1b_dynamic_override: Path | None = None,
+) -> dict[str, dict[str, list[dict[str, float]]]]:
     data: dict[str, dict[str, list[dict[str, float]]]] = defaultdict(lambda: defaultdict(list))
     for dataset in DATASETS:
         directory = root / "perf" / dataset
@@ -85,22 +104,33 @@ def load_perf(root: Path) -> dict[str, dict[str, list[dict[str, float]]]]:
             if not path.exists():
                 continue
             for row in read_csv(path):
-                recall = number(row, "recall")
-                if not recall > 0.9:
-                    continue
-                qps = number(row, "qps")
-                latency = number(row, "latency_ms")
-                if not math.isfinite(latency) and qps > 0:
-                    latency = 1000.0 / qps
-                data[dataset][method].append(
-                    {
-                        "nprobe": number(row, "nprobe"),
-                        "recall": recall,
-                        "qps": qps,
-                        "latency_ms": latency,
-                        "prune_rate": math.nan,
-                    }
-                )
+                parsed = perf_row(row)
+                if parsed is not None:
+                    data[dataset][method].append(parsed)
+
+    if sift1b_root is not None:
+        for method in METHODS:
+            path = sift1b_root / "perf" / "sift1b" / f"{method}.csv"
+            if not path.exists():
+                continue
+            replacement = [parsed for row in read_csv(path) if (parsed := perf_row(row))]
+            if replacement:
+                data["sift1b"][method] = replacement
+
+    if sift1b_dynamic_override is not None and sift1b_dynamic_override.exists():
+        overrides = [
+            parsed
+            for row in read_csv(sift1b_dynamic_override)
+            if (parsed := perf_row(row))
+        ]
+        if overrides:
+            by_probe = {
+                int(row["nprobe"]): row
+                for row in data["sift1b"].get("dynamic", [])
+            }
+            for row in overrides:
+                by_probe[int(row["nprobe"])] = row
+            data["sift1b"]["dynamic"] = list(by_probe.values())
     for methods in data.values():
         for rows in methods.values():
             rows.sort(key=lambda row: (row["recall"], row["nprobe"]))
@@ -116,7 +146,9 @@ def overall_prune(row: dict[str, str]) -> float:
 
 
 def load_fixed_pruning(
-    root: Path, perf: dict[str, dict[str, list[dict[str, float]]]]
+    root: Path,
+    perf: dict[str, dict[str, list[dict[str, float]]]],
+    sift1b_root: Path | None = None,
 ) -> dict[str, dict[str, list[dict[str, float]]]]:
     result: dict[str, dict[str, list[dict[str, float]]]] = defaultdict(lambda: defaultdict(list))
     for dataset in DATASETS:
@@ -158,6 +190,26 @@ def load_fixed_pruning(
                             "prune_rate": overall_prune(row),
                         }
                     )
+
+    if sift1b_root is not None:
+        for method in METHODS:
+            path = sift1b_root / "stats" / "sift1b" / f"{method}.csv"
+            if not path.exists():
+                continue
+            replacement = []
+            for row in read_csv(path):
+                recall = number(row, "recall")
+                if recall > 0.9:
+                    replacement.append(
+                        {
+                            "nprobe": number(row, "nprobe"),
+                            "recall": recall,
+                            "prune_rate": overall_prune(row),
+                        }
+                    )
+            if replacement:
+                result["sift1b"][method] = replacement
+
     return result
 
 
@@ -202,7 +254,7 @@ def plot_metric(data, metric: str, ylabel: str, output: Path, log_y: bool) -> No
             ax.set_yscale("log")
         ax.grid(True, which="both", alpha=0.25, linewidth=0.6)
         ax.tick_params(labelsize=8)
-        ax.set_xlabel("Recall@1", fontsize=9)
+        ax.set_xlabel(f"Recall@{LARGE_RECALL_AT.get(dataset, 1)}", fontsize=9)
         if ax in axes[:, 0]:
             ax.set_ylabel(ylabel, fontsize=9)
     fig.legend(handles=legend_handles(), loc="upper center", ncol=5, frameon=False,
@@ -234,7 +286,7 @@ def plot_pruning(data, output: Path) -> None:
         ax.set_ylim(-2, 102)
         ax.grid(True, alpha=0.25, linewidth=0.6)
         ax.tick_params(labelsize=8)
-        ax.set_xlabel("Recall@1", fontsize=9)
+        ax.set_xlabel(f"Recall@{LARGE_RECALL_AT.get(dataset, 1)}", fontsize=9)
         if ax in axes[:, 0]:
             ax.set_ylabel("Overall prune rate (%)", fontsize=9)
         if not present:
@@ -305,8 +357,18 @@ def main() -> None:
     parser.add_argument("--log-root", type=Path, default=Path("logs/log"))
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
+        "--sift1b-root",
+        type=Path,
+        help="Supplemental root containing perf/sift1b and stats/sift1b.",
+    )
+    parser.add_argument(
+        "--sift1b-dynamic-override",
+        type=Path,
+        help="Warm SIFT1B dynamic perf CSV; matching nprobe rows replace the base sweep.",
+    )
+    parser.add_argument(
         "--datasets",
-        help="Comma-separated dataset names; defaults to the ten-dataset order",
+        help="Comma-separated dataset names; defaults to the active eight-dataset order",
     )
     args = parser.parse_args()
     if args.datasets:
@@ -320,8 +382,14 @@ def main() -> None:
     output = args.output_dir or args.log_root / "plots_recall_gt09"
     output.mkdir(parents=True, exist_ok=True)
 
-    perf = load_perf(args.log_root)
-    pruning = load_fixed_pruning(args.log_root, perf)
+    perf = load_perf(
+        args.log_root,
+        args.sift1b_root,
+        args.sift1b_dynamic_override,
+    )
+    pruning = load_fixed_pruning(
+        args.log_root, perf, args.sift1b_root
+    )
     plot_metric(perf, "latency_ms", "Latency (ms/query, log scale)",
                 output / "latency_recall_gt09.png", True)
     plot_metric(perf, "qps", "QPS (log scale)", output / "qps_recall_gt09.png", True)

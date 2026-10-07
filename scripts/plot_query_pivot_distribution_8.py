@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aggregate and plot per-query dynamic pivot choices for eight datasets."""
+"""Aggregate and plot per-query dynamic pivot choices for seven datasets."""
 
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ DATASETS = (
     "msong_holdout",
     "sift1m",
     "glove25",
-    "HandOutlines",
     "StarLightCurves",
     "dbpedia1536m_holdout",
 )
@@ -34,7 +33,6 @@ DISPLAY = {
     "msong_holdout": "MillionSong",
     "sift1m": "SIFT1M",
     "glove25": "GloVe25",
-    "HandOutlines": "HandOutlines",
     "StarLightCurves": "StarLightCurves",
     "dbpedia1536m_holdout": "DBpedia",
 }

@@ -33,7 +33,4 @@ run_set sift1m "23" global 50
 run_set glove25 "1 14" per_list 100
 run_set glove25 "14" global 100
 
-# Low-P points missing from the small-dataset global sweep.
-run_set HandOutlines "1 7 16 64" global 1000
-
 echo "[$(date -Is)] SUPPLEMENT FINISHED results=${OUT_ROOT}" | tee -a "${OUT_ROOT}/supplement.log"

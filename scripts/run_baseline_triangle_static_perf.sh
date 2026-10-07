@@ -9,42 +9,42 @@ DB_ROOT="${DBPEDIA_ROOT:-/mnt/nvme/wxy}"
 OUT_ROOT="${OUT_ROOT:-${ROOT}/logs/baseline-triangle-static-$(date +%Y%m%d-%H%M%S)}"
 THREADS="${THREADS:-32}"
 
-DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 HandOutlines StarLightCurves dbpedia1536m_holdout)
+DATASETS=(nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves dbpedia1536m_holdout)
 declare -A ROOTS=(
   [nuswide]="${OLD_ROOT}" [fasion_mnist_784]="${OLD_ROOT}"
   [msong_holdout]="${OLD_ROOT}" [sift1m]="${OLD_ROOT}"
-  [glove25]="${OLD_ROOT}" [HandOutlines]="${OLD_ROOT}"
+  [glove25]="${OLD_ROOT}"
   [StarLightCurves]="${OLD_ROOT}" [dbpedia1536m_holdout]="${DB_ROOT}"
 )
 declare -A NLIST=(
   [nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000 [sift1m]=1000
-  [glove25]=1024 [HandOutlines]=32 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000
+  [glove25]=1024 [StarLightCurves]=128 [dbpedia1536m_holdout]=1000
 )
 declare -A NPROBE=(
   [nuswide]=3 [fasion_mnist_784]=7 [msong_holdout]=30 [sift1m]=50
-  [glove25]=50 [HandOutlines]=5 [StarLightCurves]=5 [dbpedia1536m_holdout]=10
+  [glove25]=50 [StarLightCurves]=5 [dbpedia1536m_holdout]=10
 )
 declare -A SOURCE_P=(
   [nuswide]=50 [fasion_mnist_784]=64 [msong_holdout]=42 [sift1m]=16
-  [glove25]=8 [HandOutlines]=271 [StarLightCurves]=103 [dbpedia1536m_holdout]=128
+  [glove25]=8 [StarLightCurves]=103 [dbpedia1536m_holdout]=128
 )
 declare -A SOURCE_SCOPE=(
   [nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list
-  [sift1m]=per_list [glove25]=per_list [HandOutlines]=global
+  [sift1m]=per_list [glove25]=per_list
   [StarLightCurves]=global [dbpedia1536m_holdout]=global
 )
 declare -A BEST_P=(
   [nuswide]=2 [fasion_mnist_784]=48 [msong_holdout]=34 [sift1m]=23
-  [glove25]=14 [HandOutlines]=7 [StarLightCurves]=18 [dbpedia1536m_holdout]=128
+  [glove25]=14 [StarLightCurves]=18 [dbpedia1536m_holdout]=128
 )
 declare -A BEST_SCOPE=(
   [nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list
-  [sift1m]=per_list [glove25]=global [HandOutlines]=global
+  [sift1m]=per_list [glove25]=global
   [StarLightCurves]=global [dbpedia1536m_holdout]=per_list
 )
 declare -A LOOPS=(
   [nuswide]=50 [fasion_mnist_784]=3 [msong_holdout]=3 [sift1m]=2
-  [glove25]=3 [HandOutlines]=100 [StarLightCurves]=30 [dbpedia1536m_holdout]=1
+  [glove25]=3 [StarLightCurves]=30 [dbpedia1536m_holdout]=1
 )
 
 mkdir -p "${OUT_ROOT}"/{csv,logs,manifests}

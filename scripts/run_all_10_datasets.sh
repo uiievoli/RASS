@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run the complete Tribase comparison. All ten datasets use query.cpp and the
-# standard float Index/IVF scan path. SIFT1B/SpaceV are decoded on input.
+# Run the complete eight-dataset Tribase comparison. The legacy filename is
+# retained for compatibility. HandOutlines and SpaceV are no longer selected.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,26 +17,25 @@ ONLY_DATASETS="${ONLY_DATASETS:-}"
 PERF_BIN="${PERF_BIN:-${ROOT}/build-perf/bin/query}"
 STATS_BIN="${STATS_BIN:-${ROOT}/build-stats/bin/query}"
 SIFT1B_DIR="${SIFT1B_DIR:-}"
-SPACEV_DIR="${SPACEV_DIR:-}"
 DRY_RUN=0
 VERBOSE=0
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/run_all_10_datasets.sh --data-root DIR --log-dir DIR [options]
+  scripts/run_all_8_datasets.sh --data-root DIR --log-dir DIR [options]
 
 Required:
-  --data-root DIR       Root containing all ten dataset directories.
+  --data-root DIR       Root containing the eight active dataset directories.
   --log-dir DIR         Output root for CSV files, logs and manifests.
 
 CPU control:
   --cpus LIST           Linux CPU list passed to taskset, e.g. 0-31 or 0-15,32-47.
   --threads N           OpenMP/worker threads; defaults to the number of bound CPUs.
   --build-batch-vectors N
-                        Decoded vectors retained per SIFT1B/SpaceV build batch
+                        Decoded vectors retained per SIFT1B build batch
                         (default 262144, about 128 MiB at D=128).
-  --coarse-hnsw-m N     HNSW coarse graph degree for SIFT1B/SpaceV (default 32).
+  --coarse-hnsw-m N     HNSW coarse graph degree for SIFT1B (default 32).
   --coarse-hnsw-ef-construction N
                         HNSW construction breadth (default 200).
   --coarse-hnsw-ef-search N
@@ -44,9 +43,8 @@ CPU control:
 
 Selection:
   --phase NAME          all (default), perf, or stats.
-  --datasets LIST       Comma/space-separated subset of the ten dataset names.
+  --datasets LIST       Subset of the eight active dataset names.
   --sift1b-dir DIR      Override DATA_ROOT/sift1b/raw.
-  --spacev-dir DIR      Override DATA_ROOT/spacev1b/raw.
   --verbose             Pass --verbose to query and retain detailed build logs.
   --dry-run             Validate arguments and print commands without running them.
   -h, --help            Show this help.
@@ -77,7 +75,6 @@ while (($#)); do
     --phase) PHASE="$2"; shift 2 ;;
     --datasets) ONLY_DATASETS="$2"; shift 2 ;;
     --sift1b-dir) SIFT1B_DIR="$2"; shift 2 ;;
-    --spacev-dir) SPACEV_DIR="$2"; shift 2 ;;
     --verbose) VERBOSE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -108,34 +105,30 @@ for hnsw_value in "${COARSE_HNSW_M}" "${COARSE_HNSW_EF_CONSTRUCTION}" \
 done
 
 SIFT1B_DIR="${SIFT1B_DIR:-${DATA_ROOT}/sift1b/raw}"
-SPACEV_DIR="${SPACEV_DIR:-${DATA_ROOT}/spacev1b/raw}"
-
 ALL_DATASETS=(
   nuswide fasion_mnist_784 msong_holdout sift1m glove25
-  HandOutlines StarLightCurves dbpedia1536m_holdout sift1b spacev1b
+  StarLightCurves dbpedia1536m_holdout sift1b
 )
 FLOAT_DATASETS=("${ALL_DATASETS[@]}")
 
 declare -A INPUT_FORMAT=(
   [nuswide]=fvecs [fasion_mnist_784]=fvecs [msong_holdout]=fvecs [sift1m]=fvecs
-  [glove25]=fvecs [HandOutlines]=fvecs [StarLightCurves]=fvecs
-  [dbpedia1536m_holdout]=fvecs [sift1b]=bvecs [spacev1b]=i8bin
+  [glove25]=fvecs [StarLightCurves]=fvecs
+  [dbpedia1536m_holdout]=fvecs [sift1b]=bvecs
 )
 
 declare -A NLIST=(
   [nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000 [sift1m]=1000
-  [glove25]=1024 [HandOutlines]=32 [StarLightCurves]=128
-  [dbpedia1536m_holdout]=1000 [sift1b]=32768 [spacev1b]=32768
+  [glove25]=1024 [StarLightCurves]=128
+  [dbpedia1536m_holdout]=1000 [sift1b]=32768
 )
 declare -A SEARCH_K=(
   [nuswide]=1 [fasion_mnist_784]=1 [msong_holdout]=1 [sift1m]=1
-  [glove25]=1 [HandOutlines]=1 [StarLightCurves]=1 [dbpedia1536m_holdout]=1
-  [sift1b]=10 [spacev1b]=10
+  [glove25]=1 [StarLightCurves]=1 [dbpedia1536m_holdout]=1 [sift1b]=10
 )
 declare -A QUERY_COUNT=(
   [nuswide]=0 [fasion_mnist_784]=0 [msong_holdout]=0 [sift1m]=0
-  [glove25]=0 [HandOutlines]=0 [StarLightCurves]=0 [dbpedia1536m_holdout]=0
-  [sift1b]=10000 [spacev1b]=29316
+  [glove25]=0 [StarLightCurves]=0 [dbpedia1536m_holdout]=0 [sift1b]=10000
 )
 declare -A NPROBES=(
   [nuswide]="1 2 3 5 8 16"
@@ -143,55 +136,48 @@ declare -A NPROBES=(
   [msong_holdout]="1 3 5 10 20 30 50 100"
   [sift1m]="1 5 10 20 30 50 70 100"
   [glove25]="1 5 10 20 30 50 70 100"
-  [HandOutlines]="1 2 3 5 7 10"
   [StarLightCurves]="1 2 3 5 7 10"
   # DBpedia first crosses recall 0.9 near nprobe=20.  Keep several points
   # above that threshold so the high-recall curves are actual curves rather
   # than a single point.
   [dbpedia1536m_holdout]="1 3 5 10 20 30 50 75 100 150 200"
   [sift1b]="32 64 128 256 512 1024"
-  [spacev1b]="8 16 32 64 128"
 )
 declare -A STATS_NPROBES=(
   [nuswide]="3" [fasion_mnist_784]="7" [msong_holdout]="30" [sift1m]="50"
-  [glove25]="50" [HandOutlines]="5" [StarLightCurves]="5"
+  [glove25]="50" [StarLightCurves]="5"
   # Detailed counters are needed at every high-recall DBpedia point to plot
   # overall pruning rate against recall.
   [dbpedia1536m_holdout]="20 30 50 75 100 150 200"
   [sift1b]="32 64 128 256 512 1024"
-  [spacev1b]="8 16 32 64 128"
 )
 declare -A PCA_P=(
   [nuswide]=50 [fasion_mnist_784]=64 [msong_holdout]=42 [sift1m]=16
-  [glove25]=8 [HandOutlines]=271 [StarLightCurves]=103 [dbpedia1536m_holdout]=128
-  [sift1b]=16 [spacev1b]=11
+  [glove25]=8 [StarLightCurves]=103 [dbpedia1536m_holdout]=128 [sift1b]=16
 )
 declare -A PCA_SCOPE=(
   [nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list
-  [sift1m]=per_list [glove25]=per_list [HandOutlines]=global
+  [sift1m]=per_list [glove25]=per_list
   [StarLightCurves]=global [dbpedia1536m_holdout]=global
-  [sift1b]=global [spacev1b]=global
+  [sift1b]=global
 )
 declare -A BEST_P=(
   [nuswide]=2 [fasion_mnist_784]=48 [msong_holdout]=34 [sift1m]=23
-  [glove25]=14 [HandOutlines]=7 [StarLightCurves]=18 [dbpedia1536m_holdout]=128
-  [sift1b]=16 [spacev1b]=11
+  [glove25]=14 [StarLightCurves]=18 [dbpedia1536m_holdout]=128 [sift1b]=16
 )
 declare -A BEST_SCOPE=(
   [nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list
-  [sift1m]=per_list [glove25]=global [HandOutlines]=global
+  [sift1m]=per_list [glove25]=global
   [StarLightCurves]=global [dbpedia1536m_holdout]=per_list
-  [sift1b]=global [spacev1b]=global
+  [sift1b]=global
 )
 declare -A LOOPS=(
   [nuswide]=20 [fasion_mnist_784]=1 [msong_holdout]=1 [sift1m]=1
-  [glove25]=1 [HandOutlines]=50 [StarLightCurves]=20 [dbpedia1536m_holdout]=1
-  [sift1b]=1 [spacev1b]=1
+  [glove25]=1 [StarLightCurves]=20 [dbpedia1536m_holdout]=1 [sift1b]=1
 )
 
 declare -A EXTERNAL_GROUNDTRUTH=(
   [sift1b]="${SIFT1B_DIR}/gnd/idx_1000M.ivecs"
-  [spacev1b]="${SPACEV_DIR}/groundtruth.30K.i32bin"
 )
 
 selected() {
@@ -388,9 +374,9 @@ run_float_dataset() {
   if [[ -n "${EXTERNAL_GROUNDTRUTH[${dataset}]:-}" ]]; then
     require_file "${EXTERNAL_GROUNDTRUTH[${dataset}]}"
   fi
-  if [[ "${dataset}" == sift1b || "${dataset}" == spacev1b ]]; then
+  if [[ "${dataset}" == sift1b ]]; then
     # Keep one physical index for each billion-scale byte dataset. The global
-    # PCA rich index (P=16 for SIFT1B, P=11 for SpaceV-1B) contains the full IVF
+    # The SIFT1B global PCA rich index (P=16) contains the full IVF
     # payload, Triangle radii and PCA signatures. Every search mode below loads
     # it read-only and selects only its runtime pruning path.
     local rich_index="${DATA_ROOT}/${dataset}/index/v10_nlist_${NLIST[${dataset}]}_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_${PCA_SCOPE[${dataset}]}_pca_P${PCA_P[${dataset}]}_seed0_coarse_ivfhnsw_M${COARSE_HNSW_M}_efc${COARSE_HNSW_EF_CONSTRUCTION}_efs${COARSE_HNSW_EF_SEARCH}.index"

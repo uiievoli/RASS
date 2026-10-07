@@ -36,8 +36,6 @@ run_dataset run_sift1m.sh sift1m \
   "1 3 5 7 10 30 50 70 100 150 200 250 300 400 600 800 0"
 run_dataset run_glove25.sh glove25 \
   "1 3 5 7 10 30 50 70 100 150 200 250 300 350 400 500 600 750 900 0"
-run_dataset run_handoutlines.sh HandOutlines \
-  "1 3 5 7 10 12 14 16 18 20 22 24 26 28 0"
 run_dataset run_starlightcurves.sh StarLightCurves \
   "1 3 5 7 10 12 14 16 18 0"
 
