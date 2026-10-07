@@ -18,13 +18,6 @@ SCOPES = ("global", "per_list")
 SCOPE_LABEL = {"global": "Global", "per_list": "Per-list"}
 SCOPE_COLOR = {"global": "#276FBF", "per_list": "#E07A3F"}
 SCOPE_HATCH = {"global": "", "per_list": "////"}
-COMPONENTS = (
-    ("projection_ms", "Query projection", "#7868C7"),
-    ("bound_ms", "Lower-bound scan", "#36A69A"),
-    ("other_filter_ms", "Traversal / control", "#A7AFBA"),
-)
-
-
 def read_rows(path: Path) -> list[dict[str, str]]:
     with path.open(newline="") as stream:
         return list(csv.DictReader(stream))
@@ -43,82 +36,90 @@ def main() -> None:
     )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--nprobe", type=int, default=30)
+    parser.add_argument(
+        "--records-csv",
+        type=Path,
+        help="Replot an existing combined CSV instead of reading raw perf/stats runs.",
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir or args.input_root / "figures"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     records: list[dict[str, float | int | str]] = []
-    for scope in SCOPES:
-        stats_path = (
-            args.input_root / "stats" / "sift1m" / f"{scope}_static_rep1.csv"
-        )
-        stats_rows = [
-            row
-            for row in read_rows(stats_path)
-            if int(float(row["nprobe"])) == args.nprobe
-        ]
-
-        perf_by_p: dict[int, list[float]] = {}
-        for path in sorted(
-            (args.input_root / "perf" / "sift1m").glob(
-                f"{scope}_static_rep*.csv"
+    if args.records_csv is not None:
+        records = [dict(row) for row in read_rows(args.records_csv)]
+    else:
+        for scope in SCOPES:
+            stats_path = (
+                args.input_root / "stats" / "sift1m" / f"{scope}_static_rep1.csv"
             )
-        ):
-            for row in read_rows(path):
-                if int(float(row["nprobe"])) != args.nprobe:
-                    continue
+            stats_rows = [
+                row
+                for row in read_rows(stats_path)
+                if int(float(row["nprobe"])) == args.nprobe
+            ]
+
+            perf_by_p: dict[int, list[float]] = {}
+            for path in sorted(
+                (args.input_root / "perf" / "sift1m").glob(
+                    f"{scope}_static_rep*.csv"
+                )
+            ):
+                for row in read_rows(path):
+                    if int(float(row["nprobe"])) != args.nprobe:
+                        continue
+                    p = int(float(row["pivot_count"]))
+                    perf_by_p.setdefault(p, []).append(as_float(row, "qps"))
+
+            for row in stats_rows:
                 p = int(float(row["pivot_count"]))
-                perf_by_p.setdefault(p, []).append(as_float(row, "qps"))
+                query_count = 10_000.0
+                projection = as_float(row, "query_signature_seconds") + as_float(
+                    row, "candidate_projection_seconds"
+                )
+                bound = as_float(row, "candidate_lb_seconds")
+                verification = as_float(row, "candidate_exact_seconds")
+                decision_residual = max(
+                    0.0,
+                    as_float(row, "candidate_decision_seconds")
+                    - bound
+                    - verification
+                    - as_float(row, "candidate_projection_seconds")
+                    - as_float(row, "candidate_active_copy_seconds"),
+                )
+                other_filter = as_float(row, "other_seconds") + decision_residual
 
-        for row in stats_rows:
-            p = int(float(row["pivot_count"]))
-            query_count = 10_000.0
-            projection = as_float(row, "query_signature_seconds") + as_float(
-                row, "candidate_projection_seconds"
-            )
-            bound = as_float(row, "candidate_lb_seconds")
-            verification = as_float(row, "candidate_exact_seconds")
-            decision_residual = max(
-                0.0,
-                as_float(row, "candidate_decision_seconds")
-                - bound
-                - verification
-                - as_float(row, "candidate_projection_seconds")
-                - as_float(row, "candidate_active_copy_seconds"),
-            )
-            other_filter = as_float(row, "other_seconds") + decision_residual
-
-            total_candidates = (
-                as_float(row, "tri")
-                + as_float(row, "tri_large")
-                + as_float(row, "multipivot_checks")
-            )
-            total_pruned = (
-                as_float(row, "tri")
-                + as_float(row, "tri_large")
-                + as_float(row, "multipivot_pruned")
-            )
-            qps_samples = perf_by_p[p]
-            records.append(
-                {
-                    "scope": scope,
-                    "p": p,
-                    "projection_ms": 1e3 * projection / query_count,
-                    "bound_ms": 1e3 * bound / query_count,
-                    "other_filter_ms": 1e3 * other_filter / query_count,
-                    "verification_ms": 1e3 * verification / query_count,
-                    "overall_prune_rate": total_pruned / total_candidates,
-                    "verified_candidates_per_query": as_float(
-                        row, "candidate_distance_computations"
-                    )
-                    / query_count,
-                    "latency_ms": 1e3 / statistics.median(qps_samples),
-                    "latency_min_ms": 1e3 / max(qps_samples),
-                    "latency_max_ms": 1e3 / min(qps_samples),
-                    "recall": as_float(row, "recall"),
-                }
-            )
+                total_candidates = (
+                    as_float(row, "tri")
+                    + as_float(row, "tri_large")
+                    + as_float(row, "multipivot_checks")
+                )
+                total_pruned = (
+                    as_float(row, "tri")
+                    + as_float(row, "tri_large")
+                    + as_float(row, "multipivot_pruned")
+                )
+                qps_samples = perf_by_p[p]
+                records.append(
+                    {
+                        "scope": scope,
+                        "p": p,
+                        "projection_ms": 1e3 * projection / query_count,
+                        "bound_ms": 1e3 * bound / query_count,
+                        "other_filter_ms": 1e3 * other_filter / query_count,
+                        "verification_ms": 1e3 * verification / query_count,
+                        "overall_prune_rate": total_pruned / total_candidates,
+                        "verified_candidates_per_query": as_float(
+                            row, "candidate_distance_computations"
+                        )
+                        / query_count,
+                        "latency_ms": 1e3 / statistics.median(qps_samples),
+                        "latency_min_ms": 1e3 / max(qps_samples),
+                        "latency_max_ms": 1e3 / min(qps_samples),
+                        "recall": as_float(row, "recall"),
+                    }
+                )
 
     pivots = sorted({int(row["p"]) for row in records})
     lookup = {(str(row["scope"]), int(row["p"])): row for row in records}
@@ -145,28 +146,27 @@ def main() -> None:
     x = np.arange(len(pivots), dtype=float)
     width = 0.34
 
-    # Left: filtering cost composition and overall pruning rate.
+    # Left: pure query-projection construction cost and its pruning benefit.
     ax = axes[0]
     prune_ax = ax.twinx()
     prune_ax.spines["top"].set_visible(False)
     prune_ax.spines["right"].set_color("#A7B0BE")
     for scope_index, scope in enumerate(SCOPES):
         xpos = x + (-0.5 if scope_index == 0 else 0.5) * width
-        bottom = np.zeros(len(pivots))
-        for key, label, color in COMPONENTS:
-            values = np.array([float(lookup[scope, p][key]) for p in pivots])
-            ax.bar(
-                xpos,
-                values,
-                width=width,
-                bottom=bottom,
-                color=color,
-                edgecolor=SCOPE_COLOR[scope],
-                linewidth=0.75,
-                hatch=SCOPE_HATCH[scope],
-                zorder=3,
-            )
-            bottom += values
+        projection_us = 1e3 * np.array(
+            [float(lookup[scope, p]["projection_ms"]) for p in pivots]
+        )
+        ax.bar(
+            xpos,
+            projection_us,
+            width=width,
+            color=SCOPE_COLOR[scope],
+            alpha=0.78,
+            edgecolor="#FFFFFF",
+            linewidth=0.8,
+            hatch=SCOPE_HATCH[scope],
+            zorder=3,
+        )
         prune = [100.0 * float(lookup[scope, p]["overall_prune_rate"]) for p in pivots]
         prune_ax.plot(
             xpos,
@@ -177,8 +177,8 @@ def main() -> None:
             linewidth=2.0,
             zorder=5,
         )
-    ax.set_title("Filtering cost composition shifts as pruning improves", pad=13)
-    ax.set_ylabel("Instrumented filtering cost (ms/query)")
+    ax.set_title("Projection construction cost grows with the PCA prefix", pad=13)
+    ax.set_ylabel("Query projection construction (µs/query)")
     prune_ax.set_ylabel("Overall prune rate (%)")
     prune_ax.set_ylim(0, 105)
     prune_ax.tick_params(axis="y", colors="#536175")
@@ -254,11 +254,11 @@ def main() -> None:
     ax.set_xticks(x, [str(p) for p in pivots])
     ax.set_xlabel("Number of pivots P (centroid included)")
 
-    component_handles = [Patch(facecolor=color, label=label) for _, label, color in COMPONENTS]
     scope_handles = [
         Patch(
-            facecolor="white",
-            edgecolor=SCOPE_COLOR[scope],
+            facecolor=SCOPE_COLOR[scope],
+            edgecolor="#FFFFFF",
+            alpha=0.78,
             hatch=SCOPE_HATCH[scope],
             label=SCOPE_LABEL[scope],
         )
@@ -266,13 +266,12 @@ def main() -> None:
     ]
     line_handles = [
         Line2D([0], [0], color="#536175", marker="o", label="Prune / latency curve"),
-        Patch(facecolor="#6C7A8E", alpha=0.78, label="Verification (distance + heap)"),
     ]
     fig.legend(
-        handles=component_handles + scope_handles + line_handles,
+        handles=scope_handles + line_handles,
         loc="upper center",
         bbox_to_anchor=(0.5, 0.90),
-        ncol=4,
+        ncol=3,
         frameon=False,
         columnspacing=1.5,
         handlelength=1.6,
@@ -288,7 +287,7 @@ def main() -> None:
     fig.text(
         0.5,
         0.085,
-        f"nprobe={args.nprobe}, Recall={recall:.4f}. Bars use the stats build; latency uses the median of 3 perf runs.\n"
+        f"nprobe={args.nprobe}, Recall={recall:.4f}. Both panels use blue for Global and orange for Per-list; latency uses the median of 3 perf runs.\n"
         "Verification currently combines exact distance, threshold comparison, and heap update; bar labels show verified candidates/query.",
         ha="center",
         va="center",
