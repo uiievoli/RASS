@@ -57,6 +57,14 @@ def parse_args() -> argparse.Namespace:
             "replaces the legacy P=128-only DBpedia stats point in the prune plot."
         ),
     )
+    parser.add_argument(
+        "--dynamic-summary",
+        type=Path,
+        help=(
+            "Summary produced by summarize_fine_pivot_dynamic_overlay_8.py. "
+            "Adds the measured dynamic result at its query-list-weighted mean P."
+        ),
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -94,7 +102,28 @@ def target_perf(root: Path, row: pd.Series) -> pd.DataFrame:
     return frame[frame.nprobe == int(row.nprobe)].copy()
 
 
-def plot_qps(root: Path, summary: pd.DataFrame, output: Path) -> None:
+def dynamic_row(dynamic: pd.DataFrame | None, dataset: str):
+    if dynamic is None:
+        return None
+    matches = dynamic[dynamic.dataset == dataset]
+    return None if matches.empty else matches.iloc[0]
+
+
+def add_dynamic_marker(ax, row, x_key: str, y_key: str) -> None:
+    if row is None:
+        return
+    x = float(row[x_key])
+    y = float(row[y_key])
+    ax.axvline(x, color="#9467bd", ls="-.", lw=1.4, alpha=0.9)
+    ax.scatter(
+        [x], [y], marker="*", s=150, color="#9467bd", edgecolor="white",
+        linewidth=0.7, zorder=8, label=f"Dynamic mean P={x:.1f}",
+    )
+
+
+def plot_qps(
+    root: Path, summary: pd.DataFrame, output: Path, dynamic: pd.DataFrame | None
+) -> None:
     fig, axes = prepare_axes("QPS vs. pivot count at the first Recall >= 0.99 point")
     for ax, row in zip(axes, summary.itertuples(index=False)):
         frame = target_perf(root, row)
@@ -110,19 +139,26 @@ def plot_qps(root: Path, summary: pd.DataFrame, output: Path) -> None:
         ax.axvline(row.median_peak_p, color="#d62728", ls="--", lw=1.5)
         if row.normalized_consensus_p != row.median_peak_p:
             ax.axvline(row.normalized_consensus_p, color="#f28e2b", ls=":", lw=2)
+        dyn = dynamic_row(dynamic, row.dataset)
+        add_dynamic_marker(ax, dyn, "mean_active_pivots", "dynamic_qps_median")
         ax.set_title(
             f"{DISPLAY[row.dataset]}  nprobe={row.nprobe}\n"
             f"median peak={row.median_peak_p}, run peaks={row.per_run_peak_p}"
+            + (f", dynamic mean={dyn.mean_active_pivots:.1f}" if dyn is not None else "")
         )
         ax.set_xlabel("Pivot count P (centroid included)")
         ax.set_ylabel("QPS")
         ax.yaxis.set_major_formatter(FuncFormatter(compact_number))
         ax.grid(alpha=0.25)
+        if dyn is not None:
+            ax.legend(loc="best", fontsize=8)
     fig.savefig(output / "01_qps_vs_pivot.png", dpi=220)
     plt.close(fig)
 
 
-def plot_latency(root: Path, summary: pd.DataFrame, output: Path) -> None:
+def plot_latency(
+    root: Path, summary: pd.DataFrame, output: Path, dynamic: pd.DataFrame | None
+) -> None:
     fig, axes = prepare_axes("Latency vs. pivot count at the first Recall >= 0.99 point")
     for ax, row in zip(axes, summary.itertuples(index=False)):
         frame = target_perf(root, row)
@@ -134,10 +170,14 @@ def plot_latency(root: Path, summary: pd.DataFrame, output: Path) -> None:
         ax.fill_between(median.index, low, high, color="#59a14f", alpha=0.2)
         ax.plot(median.index, median, color="#59a14f", marker="o", ms=3, lw=2)
         ax.axvline(row.median_peak_p, color="#d62728", ls="--", lw=1.5)
+        dyn = dynamic_row(dynamic, row.dataset)
+        add_dynamic_marker(ax, dyn, "mean_active_pivots", "dynamic_latency_ms")
         ax.set_title(f"{DISPLAY[row.dataset]}  nprobe={row.nprobe}")
         ax.set_xlabel("Pivot count P (centroid included)")
         ax.set_ylabel("Latency (ms/query)")
         ax.grid(alpha=0.25)
+        if dyn is not None:
+            ax.legend(loc="best", fontsize=8)
     fig.savefig(output / "02_latency_vs_pivot.png", dpi=220)
     plt.close(fig)
 
@@ -165,7 +205,11 @@ def stats_frame(
 
 
 def plot_pruning(
-    root: Path, summary: pd.DataFrame, output: Path, dbpedia_stats: Path | None = None
+    root: Path,
+    summary: pd.DataFrame,
+    output: Path,
+    dbpedia_stats: Path | None = None,
+    dynamic: pd.DataFrame | None = None,
 ) -> None:
     fig, axes = prepare_axes("Overall prune rate vs. pivot count")
     for ax, row in zip(axes, summary.itertuples(index=False)):
@@ -187,6 +231,15 @@ def plot_pruning(
                 color="#d62728",
                 zorder=5,
             )
+        dyn = dynamic_row(dynamic, row.dataset)
+        if dyn is not None:
+            dynamic_for_plot = dyn.copy()
+            dynamic_for_plot["dynamic_prune_percent"] = (
+                100 * float(dyn.overall_prune_rate)
+            )
+            add_dynamic_marker(
+                ax, dynamic_for_plot, "mean_active_pivots", "dynamic_prune_percent"
+            )
         ax.set_ylim(0, 101)
         suffix = (
             " (target point only)"
@@ -197,6 +250,8 @@ def plot_pruning(
         ax.set_xlabel("Pivot count P (centroid included)")
         ax.set_ylabel("Overall prune rate (%)")
         ax.grid(alpha=0.25)
+        if dyn is not None:
+            ax.legend(loc="best", fontsize=8)
     fig.savefig(output / "03_prune_rate_vs_pivot.png", dpi=220)
     plt.close(fig)
 
@@ -267,11 +322,16 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     dbpedia_stats = args.dbpedia_stats.resolve() if args.dbpedia_stats else None
     if dbpedia_stats is not None and not dbpedia_stats.is_file():
-        parser.error(f"--dbpedia-stats does not exist: {dbpedia_stats}")
+        raise SystemExit(f"--dbpedia-stats does not exist: {dbpedia_stats}")
+    if args.dynamic_summary is not None and not args.dynamic_summary.is_file():
+        raise SystemExit(
+            f"--dynamic-summary does not exist: {args.dynamic_summary}"
+        )
+    dynamic = pd.read_csv(args.dynamic_summary) if args.dynamic_summary else None
     summary = pd.read_csv(root / "fine_screen_summary.csv")
-    plot_qps(root, summary, output)
-    plot_latency(root, summary, output)
-    plot_pruning(root, summary, output, dbpedia_stats)
+    plot_qps(root, summary, output, dynamic)
+    plot_latency(root, summary, output, dynamic)
+    plot_pruning(root, summary, output, dbpedia_stats, dynamic)
     plot_speedup(summary, output)
     plot_stage_share(summary, output)
     plot_normalized_tradeoff(root, summary, output)
