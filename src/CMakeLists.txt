@@ -6,6 +6,7 @@ set(SRC_FILES
     IVF.cpp
     Microblock.cpp
     MultiPivot.cpp
+    Ppd.cpp
     # utils.cpp
 )
 
@@ -20,6 +21,9 @@ target_link_libraries(main Tribase faiss)
 
 add_executable(query query.cpp)
 target_link_libraries(query Tribase faiss)
+
+add_executable(ppd_query ppd_query.cpp)
+target_link_libraries(ppd_query Tribase faiss)
 
 add_executable(import_legacy_index import_legacy_index.cpp)
 target_link_libraries(import_legacy_index Tribase faiss)

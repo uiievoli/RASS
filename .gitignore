@@ -43,3 +43,4 @@ reports
 /Tribase-*.tar.gz
 /Tribase-*.tar.gz.sha256
 /scripts/sample_bvecs_gz
+/docs

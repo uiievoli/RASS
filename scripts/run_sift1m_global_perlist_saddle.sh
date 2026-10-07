@@ -165,23 +165,36 @@ run_bound() {
 }
 
 csv_complete() {
-  local path="$1" expected_text="$2"
+  local path="$1" expected_text="$2" phase="${3:-perf}"
   [[ -s "$path" ]] || return 1
-  python3 - "$path" "$NPROBE" "$expected_text" <<'PY'
+  python3 - "$path" "$NPROBE" "$expected_text" "$phase" <<'PY'
 import csv
 import sys
 
-path, nprobe, expected_text = sys.argv[1:]
+path, nprobe, expected_text, phase = sys.argv[1:]
 expected = {(int(nprobe), int(p)) for p in expected_text.split()}
 try:
     with open(path, newline="") as stream:
-        found = {
-            (int(float(row["nprobe"])), int(float(row["pivot_count"])))
-            for row in csv.DictReader(stream)
-        }
+        rows = list(csv.DictReader(stream))
 except (OSError, ValueError, KeyError, csv.Error):
     raise SystemExit(1)
-raise SystemExit(0 if expected.issubset(found) else 1)
+found = {
+    (int(float(row["nprobe"])), int(float(row["pivot_count"]))): row
+    for row in rows
+}
+if not expected.issubset(found):
+    raise SystemExit(1)
+if phase == "stats":
+    for key in expected:
+        row = found[key]
+        candidates = sum(
+            float(row.get(name, 0) or 0)
+            for name in ("tri", "tri_large", "multipivot_checks", "candidate_distance_computations")
+        )
+        worker = float(row.get("search_worker_seconds", 0) or 0)
+        if candidates <= 0 or worker <= 0:
+            raise SystemExit(1)
+raise SystemExit(0)
 PY
 }
 
@@ -202,7 +215,7 @@ run_case() {
   partial="$csv.partial"
   logfile="$output/${tag}_rep${repeat}.log"
 
-  if csv_complete "$csv" "$expected" && { ((DRY_RUN)) || [[ -s "$expected_index" ]]; }; then
+  if csv_complete "$csv" "$expected" "$phase" && { ((DRY_RUN)) || [[ -s "$expected_index" ]]; }; then
     log "SKIP $phase/sift1m/$tag/rep$repeat"
     return
   fi
@@ -223,7 +236,7 @@ run_case() {
   mkdir -p "$output"
   rm -f "$partial" "$logfile.partial"
   if run_bound "${command[@]}" >"$logfile.partial" 2>&1; then
-    csv_complete "$partial" "$expected" || {
+    csv_complete "$partial" "$expected" "$phase" || {
       log "FAILED incomplete CSV: $partial"; return 1;
     }
     [[ -s "$expected_index" ]] || {
