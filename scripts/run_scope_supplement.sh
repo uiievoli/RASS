@@ -21,19 +21,19 @@ run_set() {
 }
 
 # Matching per-list/global runs at the best pivot observed in the earlier sweep.
-run_set fasion_mnist_784 "1 64" per_list 100
-run_set fasion_mnist_784 "64" global 100
+run_set fasion_mnist_784 "1 48" per_list 100
+run_set fasion_mnist_784 "48" global 100
 
-run_set msong_holdout "1 64" per_list 100
-run_set msong_holdout "64" global 100
+run_set msong_holdout "1 34" per_list 100
+run_set msong_holdout "34" global 100
 
-run_set sift1m "1 16" per_list 50
-run_set sift1m "16" global 50
+run_set sift1m "1 23" per_list 50
+run_set sift1m "23" global 50
 
-run_set glove25 "1 8" per_list 100
-run_set glove25 "8" global 100
+run_set glove25 "1 14" per_list 100
+run_set glove25 "14" global 100
 
 # Low-P points missing from the small-dataset global sweep.
-run_set HandOutlines "1 4 16 64" global 1000
+run_set HandOutlines "1 7 16 64" global 1000
 
 echo "[$(date -Is)] SUPPLEMENT FINISHED results=${OUT_ROOT}" | tee -a "${OUT_ROOT}/supplement.log"

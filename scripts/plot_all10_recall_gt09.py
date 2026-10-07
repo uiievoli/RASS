@@ -141,13 +141,12 @@ def load_fixed_pruning(
                 continue
             _, _, chosen_rows = max(candidates, key=lambda item: item[0])
             for row in chosen_rows:
-                # An older remote copy of the DBpedia runner created
-                # static_best.csv by copying PCA10 (P=128).  The canonical
-                # best-static configuration is P=64, so do not mislabel it.
+                # Reject stale DBpedia static_best files produced before the
+                # fine-grained sweep selected the canonical P=128 prefix.
                 if (
                     dataset == "dbpedia1536m_holdout"
                     and method == "static_best"
-                    and int(number(row, "pivot_count", -1)) != 64
+                    and int(number(row, "pivot_count", -1)) != 128
                 ):
                     continue
                 recall = number(row, "recall")

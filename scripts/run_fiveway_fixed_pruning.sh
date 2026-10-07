@@ -15,8 +15,8 @@ declare -A NLIST=([nuswide]=512 [fasion_mnist_784]=256 [msong_holdout]=1000 [sif
 declare -A NPROBE=([nuswide]=3 [fasion_mnist_784]=7 [msong_holdout]=30 [sift1m]=50 [glove25]=50 [HandOutlines]=5 [StarLightCurves]=5 [dbpedia1536m_holdout]=10)
 declare -A PCA_P=([nuswide]=50 [fasion_mnist_784]=64 [msong_holdout]=42 [sift1m]=16 [glove25]=8 [HandOutlines]=271 [StarLightCurves]=103 [dbpedia1536m_holdout]=128)
 declare -A PCA_SCOPE=([nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list [sift1m]=per_list [glove25]=per_list [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=global)
-declare -A BEST_P=([nuswide]=4 [fasion_mnist_784]=64 [msong_holdout]=64 [sift1m]=16 [glove25]=8 [HandOutlines]=4 [StarLightCurves]=64 [dbpedia1536m_holdout]=128)
-declare -A BEST_SCOPE=([nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list [sift1m]=per_list [glove25]=per_list [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=global)
+declare -A BEST_P=([nuswide]=2 [fasion_mnist_784]=48 [msong_holdout]=34 [sift1m]=23 [glove25]=14 [HandOutlines]=7 [StarLightCurves]=18 [dbpedia1536m_holdout]=128)
+declare -A BEST_SCOPE=([nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list [sift1m]=per_list [glove25]=global [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=per_list)
 
 mkdir -p "${OUT_ROOT}"/{csv,logs,manifests}
 run_mode() {

@@ -173,14 +173,14 @@ declare -A PCA_SCOPE=(
   [sift1b]=global [spacev1b]=global
 )
 declare -A BEST_P=(
-  [nuswide]=4 [fasion_mnist_784]=64 [msong_holdout]=64 [sift1m]=16
-  [glove25]=8 [HandOutlines]=4 [StarLightCurves]=64 [dbpedia1536m_holdout]=64
+  [nuswide]=2 [fasion_mnist_784]=48 [msong_holdout]=34 [sift1m]=23
+  [glove25]=14 [HandOutlines]=7 [StarLightCurves]=18 [dbpedia1536m_holdout]=128
   [sift1b]=16 [spacev1b]=11
 )
 declare -A BEST_SCOPE=(
-  [nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list
-  [sift1m]=per_list [glove25]=per_list [HandOutlines]=global
-  [StarLightCurves]=global [dbpedia1536m_holdout]=global
+  [nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list
+  [sift1m]=per_list [glove25]=global [HandOutlines]=global
+  [StarLightCurves]=global [dbpedia1536m_holdout]=per_list
   [sift1b]=global [spacev1b]=global
 )
 declare -A LOOPS=(
@@ -262,6 +262,33 @@ raise SystemExit(0 if expected.issubset(found) else 1)
 PY
 }
 
+csv_has_config() {
+  local path="$1" expected_pivots="$2" expected_scope="$3"
+  [[ -s "${path}" ]] || return 1
+  python3 - "${path}" "${expected_pivots}" "${expected_scope}" <<'PY'
+import csv
+import sys
+
+path, expected_pivots, expected_scope = sys.argv[1:]
+try:
+    with open(path, newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    if not rows:
+        raise SystemExit(1)
+    if expected_pivots and any(
+        int(float(row.get("pivot_count", -1))) != int(expected_pivots)
+        for row in rows
+    ):
+        raise SystemExit(1)
+    if expected_scope and any(
+        row.get("multipivot_scope", "") != expected_scope for row in rows
+    ):
+        raise SystemExit(1)
+except (OSError, ValueError, csv.Error):
+    raise SystemExit(1)
+PY
+}
+
 csv_has_high_recall_points() {
   local path="$1" minimum="$2"
   [[ -s "${path}" ]] || return 1
@@ -295,7 +322,16 @@ run_float_mode() {
     probes_text="${STATS_NPROBES[${dataset}]}"
   fi
   read -r -a probes <<<"${probes_text}"
-  if csv_has_probes "${csv}" "${probes_text}"; then
+  local expected_pivots="" expected_scope="" argument_index
+  local -a run_arguments=("$@")
+  for ((argument_index=0; argument_index + 1 < ${#run_arguments[@]}; ++argument_index)); do
+    case "${run_arguments[argument_index]}" in
+      --pivot_counts) expected_pivots="${run_arguments[argument_index + 1]}" ;;
+      --multipivot_scope) expected_scope="${run_arguments[argument_index + 1]}" ;;
+    esac
+  done
+  if csv_has_probes "${csv}" "${probes_text}" &&
+     csv_has_config "${csv}" "${expected_pivots}" "${expected_scope}"; then
     log "SKIP complete ${phase}/${dataset}/${mode}: ${csv}"
     return
   fi

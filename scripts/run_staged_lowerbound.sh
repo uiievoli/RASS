@@ -27,12 +27,12 @@ declare -A NPROBE=(
   [sift1m]=50 [glove25]=50 [HandOutlines]=5 [StarLightCurves]=5
 )
 declare -A PIVOTS=(
-  [nuswide]=4 [fasion_mnist_784]=64 [msong_holdout]=64
-  [sift1m]=16 [glove25]=8 [HandOutlines]=4 [StarLightCurves]=64
+  [nuswide]=2 [fasion_mnist_784]=48 [msong_holdout]=34
+  [sift1m]=23 [glove25]=14 [HandOutlines]=7 [StarLightCurves]=18
 )
 declare -A SCOPE=(
-  [nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list
-  [sift1m]=per_list [glove25]=per_list [HandOutlines]=global [StarLightCurves]=global
+  [nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list
+  [sift1m]=per_list [glove25]=global [HandOutlines]=global [StarLightCurves]=global
 )
 declare -A LOOPS=(
   [nuswide]=100 [fasion_mnist_784]=4 [msong_holdout]=4

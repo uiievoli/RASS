@@ -28,8 +28,8 @@ declare -A NPROBES=(
 )
 declare -A PCA_P=([nuswide]=50 [fasion_mnist_784]=64 [msong_holdout]=42 [sift1m]=16 [glove25]=8 [HandOutlines]=271 [StarLightCurves]=103 [dbpedia1536m_holdout]=128)
 declare -A PCA_SCOPE=([nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list [sift1m]=per_list [glove25]=per_list [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=global)
-declare -A BEST_P=([nuswide]=4 [fasion_mnist_784]=64 [msong_holdout]=64 [sift1m]=16 [glove25]=8 [HandOutlines]=4 [StarLightCurves]=64 [dbpedia1536m_holdout]=128)
-declare -A BEST_SCOPE=([nuswide]=global [fasion_mnist_784]=global [msong_holdout]=per_list [sift1m]=per_list [glove25]=per_list [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=global)
+declare -A BEST_P=([nuswide]=2 [fasion_mnist_784]=48 [msong_holdout]=34 [sift1m]=23 [glove25]=14 [HandOutlines]=7 [StarLightCurves]=18 [dbpedia1536m_holdout]=128)
+declare -A BEST_SCOPE=([nuswide]=per_list [fasion_mnist_784]=per_list [msong_holdout]=per_list [sift1m]=per_list [glove25]=global [HandOutlines]=global [StarLightCurves]=global [dbpedia1536m_holdout]=per_list)
 declare -A LOOPS=([nuswide]=20 [fasion_mnist_784]=1 [msong_holdout]=1 [sift1m]=1 [glove25]=1 [HandOutlines]=50 [StarLightCurves]=20 [dbpedia1536m_holdout]=1)
 
 mkdir -p "${OUT_ROOT}"/{csv,logs,manifests}
