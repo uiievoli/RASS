@@ -37,6 +37,8 @@ DISPLAY = {
     "dbpedia1536m_holdout": "DBpedia-1536",
     "sift1b": "SIFT1B",
     "spacev1b": "SpaceV (static ref. P=11)",
+    "glove-200-angular": "GloVe-200 · Angular",
+    "landmark-dino-768-cosine": "Landmark-DINO-768 · Cosine",
 }
 
 METHODS = ["baseline", "triangle", "pca10", "static_best", "dynamic"]
@@ -218,8 +220,10 @@ def load_fixed_pruning(
 
 
 def legend_handles() -> list[Line2D]:
+    reference_only = set(DATASETS).issubset({"glove-200-angular", "landmark-dino-768-cosine"})
     return [
-        Line2D([0], [0], color=COLOR[m], marker=MARKER[m], lw=2, ms=5, label=LABEL[m])
+        Line2D([0], [0], color=COLOR[m], marker=MARKER[m], lw=2, ms=5,
+               label="Reference static PCA" if m == "static_best" and reference_only else LABEL[m])
         for m in METHODS
     ]
 

@@ -44,3 +44,4 @@ reports
 /Tribase-*.tar.gz.sha256
 /scripts/sample_bvecs_gz
 /docs
+/datasets/cosine_supplement/

@@ -20,6 +20,34 @@ path described below, not the streaming IVF+HNSW construction path.
 
 To run only SIFT1M, add `--datasets sift1m`.
 
+## SIFT1B construction-only supplement without index files
+
+```bash
+python3 scripts/run_index_build_comparison.py \
+  --data-root /path/to/data \
+  --log-dir /path/to/log/index_build_sift1b_ram \
+  --datasets sift1b \
+  --no-save \
+  --cpus 0-55 --threads 56 --repeats 3
+```
+
+`--no-save` retains one freshly constructed IVF in RAM throughout a repeat.
+Every method adds its own structures to that IVF, is timed, and releases those
+structures before the next method. Vectors, IDs, norms, centroids and list order
+are unchanged; no duplicate IVF clone, temporary IVF save, or index reload is
+performed. Only logs, configuration and CSV files are written. Use a new log
+root so the incomplete disk-writing run remains separate.
+
+In this mode CSV `indexes_persisted=0`; save-time, build-plus-save and serialized
+index-size columns are NaN (not measured). Actual construction times remain
+finite and comparable; cleanup happens outside the measured build region.
+PPD still uses full-database PCA by default, and prepares all transformed
+candidates. Its target table is omitted for full training and its training
+matrix is freed before transformed database storage is allocated. This avoids
+three full vector matrices being live together, but full-scale SIFT1B still
+requires roughly a terabyte at the base/IVF or IVF/PPD buffer peaks. The resident
+native clustering path is unchanged by `--no-save`.
+
 Multiple datasets: `--datasets "sift1m,msong_holdout,nuswide"`. Each dataset uses
 its configured nlist (1000, 1000, 512 respectively). Use `--nlist` to override.
 Global/per-list use separate dataset-specific tested-best P defaults from
@@ -125,6 +153,21 @@ after assignment rather than fused into `Index::add`.
 Save timers measure serialization and ordinary buffered writes/close; they do
 not force fsync or cold-cache disk I/O. Use algorithm build time for the primary
 construction-cost comparison and report save time separately.
+
+## Write failures
+
+The wrapper prints the last 60 log lines on a child failure; saving errors also
+identify the destination file, an OS error hint when available, and filesystem
+available bytes (which do not account for user quotas). `Failed to write pivot
+metadata` can report a stream already failed during the preceding candidate
+array write, including in bare IVF; it does not imply a PCA geometry error.
+
+At N=1e9 and D=128, float vectors alone take 512 GB (decimal). Native IVF adds
+IDs and norms, approximately 524 GB total. With P16 for both scopes, retaining
+all five method outputs uses roughly 2.8 TB per repeat and 8.3 TB for three
+repeats, plus other datasets and inputs. Check disk space, user/project quota,
+file-size limits and filesystem errors on the output storage. Incomplete files
+are preserved for diagnosis; do not count them as usable indexes.
 
 Each repeat's `build_times.csv` has all stage times. `all_runs.csv` combines
 repeats; `summary.csv` gives medians and min/max. Medians of separate fields need

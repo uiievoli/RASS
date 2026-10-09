@@ -7,10 +7,41 @@ import csv
 import math
 import statistics
 import struct
+import json
+import re
 from pathlib import Path
 
 PROTOCOL = "search_only_v2"
 METHODS = ("baseline", "triangle", "pca10", "static_best", "dynamic")
+
+
+def experiment_config(args) -> None:
+    profiles = json.loads(args.path.read_text())
+    if not isinstance(profiles, dict) or not profiles: raise ValueError('Empty experiment config')
+    required = ('NLIST','SEARCH_K','QUERY_COUNT','NPROBES','PCA_P','PCA_SCOPE','BEST_P','BEST_SCOPE',
+                'DYNAMIC_PMAX','DYNAMIC_SCOPE','LOOPS','NORMALIZE','EXTERNAL_GROUNDTRUTH','SOURCE_METRIC')
+    for dataset, values in profiles.items():
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+',dataset) or set(values) != set(required):
+            raise ValueError(f'Invalid dataset/profile keys: {dataset}')
+        for key in ('NLIST','SEARCH_K','LOOPS'):
+            if not isinstance(values[key],int) or values[key] <= 0: raise ValueError(f'Invalid {key}')
+        for key in ('PCA_P','BEST_P','DYNAMIC_PMAX'):
+            if not isinstance(values[key],int) or not 2 <= values[key] <= 512: raise ValueError(f'Invalid {key}')
+        if not isinstance(values['QUERY_COUNT'],int) or values['QUERY_COUNT'] < 0: raise ValueError('Invalid QUERY_COUNT')
+        for key in ('PCA_SCOPE','BEST_SCOPE','DYNAMIC_SCOPE'):
+            if values[key] not in ('global','per_list'): raise ValueError(f'Invalid {key}')
+        probes = [int(x) for x in str(values['NPROBES']).split()]
+        if not probes or len(set(probes)) != len(probes) or any(not 1 <= p <= values['NLIST'] for p in probes):
+            raise ValueError('Invalid/duplicate nprobes')
+        if values['NORMALIZE'] not in (0,1): raise ValueError('Invalid normalization flag')
+        if values['SOURCE_METRIC'] not in ('angular','cosine','l2'): raise ValueError('Invalid source metric')
+        if values['SOURCE_METRIC'] in ('angular','cosine') and not values['NORMALIZE']:
+            raise ValueError('Cosine/angular profiles require normalization')
+        values['EXTERNAL_GROUNDTRUTH'] = str(args.data_root/dataset/values['EXTERNAL_GROUNDTRUTH'])
+        for key in required:
+            value=str(values[key])
+            if '\n' in value or '\t' in value: raise ValueError('Config values cannot contain tabs/newlines')
+            print(dataset,key,value,sep='\t')
 
 
 def index_info(args) -> None:
@@ -232,10 +263,13 @@ def main() -> None:
     vectors.add_argument("base", type=Path)
     vectors.add_argument("query", type=Path)
     vectors.add_argument("--nq", type=int, default=0)
+    config=sub.add_parser('config')
+    config.add_argument('path',type=Path)
+    config.add_argument('--data-root',type=Path,required=True)
     args = parser.parse_args()
     try:
         {"check": check, "aggregate": aggregate, "summarize": summarize,
-         "index-info": index_info, "input-info": input_info}[args.command](args)
+         "index-info": index_info, "input-info": input_info, 'config':experiment_config}[args.command](args)
     except (OSError, ValueError, KeyError, csv.Error, struct.error) as error:
         parser.exit(1, f"{error}\n")
 

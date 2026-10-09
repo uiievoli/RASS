@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import statistics
 import subprocess
+import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 DEFAULT_DATASETS=('fasion_mnist_784','msong_holdout','sift1m','glove25',
@@ -33,6 +34,7 @@ p.add_argument('--threads',type=int,default=32)
 p.add_argument('--cpus',default='0-31')
 p.add_argument('--seed',type=int,default=0)
 p.add_argument('--pca-without-triangle',action='store_true')
+p.add_argument('--no-save',action='store_true',help='Build all methods on one in-memory IVF; write only logs/CSV')
 p.add_argument('--bin',default=str(ROOT/'build-perf/bin/index_build_benchmark'))
 p.add_argument('--skip-build',action='store_true')
 p.add_argument('--build-jobs',type=int,default=8)
@@ -85,13 +87,14 @@ for dataset in datasets:
              '--per-list-pivot-count',str(setting['per_list']['pivot_count']),'--seed',str(a.seed),
              '--ppd-train-samples',str(a.ppd_train_samples)]
         if a.pca_without_triangle: cmd.append('--pca-without-triangle')
+        if a.no_save: cmd.append('--no-save')
         jobs.append((dataset,rep,directory,cmd))
 if a.dry_run:
     import shlex
     for _,_,_,cmd in jobs: print(shlex.join(cmd))
     raise SystemExit(0)
 out.mkdir(parents=True,exist_ok=True)
-config=vars(a).copy();config['protocol']='shared_ivf_build_v1';config['resolved_pivots']=resolved_pivots
+config=vars(a).copy();config['protocol']='shared_ivf_ram_build_v1' if a.no_save else 'shared_ivf_build_v1';config['resolved_pivots']=resolved_pivots
 config_path=out/'config.json'
 if config_path.exists() and json.loads(config_path.read_text())!=config:
     p.error('Output has a different configuration; use a new --log-dir')
@@ -110,7 +113,18 @@ for dataset,rep,directory,cmd in jobs:
             p.error(f'Incomplete repeat {directory}; preserve/move it and rerun, or use a new log root')
         print(f'START {dataset} repeat={rep}',flush=True)
         with (out/'commands.jsonl').open('a') as f: f.write(json.dumps(cmd)+'\n')
-        with log.open('w') as f: subprocess.run(cmd,env=env,stdout=f,stderr=subprocess.STDOUT,check=True)
+        with log.open('w') as f:
+            result=subprocess.run(cmd,env=env,stdout=f,stderr=subprocess.STDOUT)
+        if result.returncode:
+            print(f'FAILED {dataset} repeat={rep}: exit status {result.returncode}; log: {log}',file=sys.stderr)
+            try:
+                with log.open('rb') as f:
+                    f.seek(0,2);size=f.tell();f.seek(max(0,size-65536))
+                    tail=f.read().decode('utf-8',errors='replace').splitlines()[-60:]
+                print('\n'.join(tail),file=sys.stderr)
+            except OSError as error:
+                print(f'Cannot read failure log: {error}',file=sys.stderr)
+            raise SystemExit(1)
         (directory/'complete').touch()
     with (directory/'build_times.csv').open() as f:
         rows=list(csv.DictReader(f))
@@ -123,7 +137,7 @@ summary=[]
 for dataset in datasets:
     for method in ['ivf','tribase_triangle','ppd','pca_per_list','pca_global']:
         rows=[r for r in records if r['dataset']==dataset and r['method']==method]
-        result=dict(dataset=dataset,method=method,repeats=len(rows),pivot_count=rows[0]['pivot_count'])
+        result=dict(dataset=dataset,method=method,repeats=len(rows),pivot_count=rows[0]['pivot_count'],indexes_persisted=rows[0]['indexes_persisted'])
         for key in ['common_ivf_build_seconds','extra_build_seconds','total_build_seconds','total_save_seconds','build_plus_save_seconds','logical_index_bytes']:
             values=[float(r[key]) for r in rows]
             result[key+'_median']=statistics.median(values)

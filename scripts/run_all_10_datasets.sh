@@ -25,6 +25,7 @@ WARMUP_LOOPS="${WARMUP_LOOPS:-1}"
 PIVOT_SEED="${PIVOT_SEED:-0}"
 OMP_WAIT_POLICY="${OMP_WAIT_POLICY:-PASSIVE}"
 RESULT_HELPER="${ROOT}/scripts/recall_sweep_results.py"
+CONFIG_FILE="${CONFIG_FILE:-}"
 DRY_RUN=0
 VERBOSE=0
 
@@ -60,6 +61,7 @@ Selection:
   --pivot-seed N        PCA seed; default 0 (reuses the SIFT1B PCA16 index).
   --omp-wait-policy P   PASSIVE (default) or ACTIVE, recorded with each run.
   --datasets LIST       Subset of the ten dataset names.
+  --config FILE         Validated JSON profiles for a separate supplement.
   --sift1b-dir DIR      Override DATA_ROOT/sift1b/raw; link inputs if origin is absent.
   --spacev-dir DIR      Override DATA_ROOT/spacev1b/raw; link inputs if origin is absent.
   --sift1b-index FILE   Reuse an existing native global PCA index (P >= 16).
@@ -102,6 +104,7 @@ while (($#)); do
     --pivot-seed) PIVOT_SEED="$2"; shift 2 ;;
     --omp-wait-policy) OMP_WAIT_POLICY="$2"; shift 2 ;;
     --datasets) ONLY_DATASETS="$2"; shift 2 ;;
+    --config) CONFIG_FILE="$2"; shift 2 ;;
     --sift1b-dir) SIFT1B_DIR="$2"; shift 2 ;;
     --spacev-dir) SPACEV_DIR="$2"; shift 2 ;;
     --sift1b-index) SIFT1B_INDEX="$2"; shift 2 ;;
@@ -222,6 +225,20 @@ declare -A EXTERNAL_GROUNDTRUTH=(
   [spacev1b]="${SPACEV_DIR}/groundtruth.30K.i32bin"
 )
 declare -A DIMENSION
+declare -A NORMALIZE SOURCE_METRIC
+if [[ -n "$CONFIG_FILE" ]]; then
+  config_lines="$(python3 "$RESULT_HELPER" config "$CONFIG_FILE" --data-root "$DATA_ROOT")"
+  ALL_DATASETS=()
+  previous_dataset=""
+  while IFS=$'\t' read -r dataset key value; do
+    if [[ "$dataset" != "$previous_dataset" ]]; then
+      ALL_DATASETS+=("$dataset"); previous_dataset="$dataset"; INPUT_FORMAT["$dataset"]=fvecs
+    fi
+    declare -n config_array="$key"
+    config_array["$dataset"]="$value"
+  done <<< "$config_lines"
+  unset -n config_array
+fi
 
 selected() {
   local needle="$1"
@@ -280,6 +297,7 @@ validate_input() {
   DIMENSION[$dataset]="$dimension"
   ((requested > 0)) || requested="$nq"
   local label_status=not_applicable static_origin=fine_sweep
+  [[ -z "$CONFIG_FILE" ]] || static_origin=reference_not_fine_sweep_optimum
   [[ "$dataset" != spacev1b ]] || static_origin=reference_P11_not_fine_sweep_optimum
   if [[ "$dataset" == HandOutlines || "$dataset" == StarLightCurves ]]; then
     label_status=check_source_format
@@ -289,8 +307,9 @@ validate_input() {
       log "INPUT $dataset D=${DIMENSION[$dataset]} appears to include a label coordinate; using the existing input/groundtruth as supplied"
     fi
   fi
-  printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$dataset" "$nb" "${DIMENSION[$dataset]}" "$nq" \
-    "$requested" "${NLIST[$dataset]}" "$label_status" "$static_origin" >> "$LOG_DIR/input_manifest.csv"
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$dataset" "$nb" "${DIMENSION[$dataset]}" "$nq" \
+    "$requested" "${NLIST[$dataset]}" "$label_status" "$static_origin" "${SOURCE_METRIC[$dataset]:-l2}" \
+    "${NORMALIZE[$dataset]:-0}" >> "$LOG_DIR/input_manifest.csv"
 }
 run_bound() {
   local -a command=(env -u TRIBASE_TRACE -u EDGE_DEVICE_ENABLED
@@ -346,6 +365,7 @@ common_arguments() {
     --input_format "${INPUT_FORMAT[$dataset]}" --output_format bin --metric l2
     --k "${SEARCH_K[$dataset]}" --nq "${QUERY_COUNT[$dataset]}"
     --nlist "${NLIST[$dataset]}" --signature_precision float32 --pivot_seed "$PIVOT_SEED")
+  [[ "${NORMALIZE[$dataset]:-0}" != 1 ]] || COMMON+=(--normalize)
   if [[ -n "${EXTERNAL_GROUNDTRUTH[$dataset]:-}" ]]; then
     COMMON+=(--groundtruth_path "${EXTERNAL_GROUNDTRUTH[$dataset]}")
   fi
@@ -382,7 +402,12 @@ build_index() {
       *) geometry+=("${arguments[i]}") ;;
     esac
   done
+  local input_state=""
+  if [[ -n "$CONFIG_FILE" ]] && ((!DRY_RUN)); then
+    input_state="$(stat -c '%n:%s:%y' "$DATA_ROOT/$dataset/origin/${dataset}_base.${INPUT_FORMAT[$dataset]}")"
+  fi
   recipe="$(quote_command "${geometry[@]}") $source_state"
+  [[ -z "$input_state" ]] || recipe+=" $input_state"
   if ((!DRY_RUN)) && [[ -s "$target" && -f "${target}.origin" ]] &&
      [[ "$(cat "${target}.origin")" == "$recipe" ]]; then
     log "REUSE shared index $target"
@@ -457,12 +482,18 @@ prepare_dataset() {
     RICH_P[global]="$physical_count"
     return
   fi
-  root="$DATA_ROOT/$dataset/index/recall_shared_v2_nlist_${NLIST[$dataset]}_seed${PIVOT_SEED}"
+  local unit_tag=""
+  [[ "${NORMALIZE[$dataset]:-0}" != 1 ]] || unit_tag=_unit
+  root="$DATA_ROOT/$dataset/index/recall_shared_v2_nlist_${NLIST[$dataset]}_seed${PIVOT_SEED}${unit_tag}"
   SHARED_TRIANGLE="${root}_triangle.index"
-  local baseline="$DATA_ROOT/$dataset/index/v10_nlist_${NLIST[$dataset]}_metric_l2_opt_0_subk_15_subNprobeRatio_1_mp_global_affine_fps_P0_seed0.index"
+  local baseline="$DATA_ROOT/$dataset/index/v10_nlist_${NLIST[$dataset]}_metric_l2_opt_0_subk_15_subNprobeRatio_1_mp_global_affine_fps_P0_seed0${unit_tag}.index"
   local -a source=()
   if [[ ! -f "$baseline" ]]; then
-    baseline="$DATA_ROOT/$dataset/index/v10_nlist_${NLIST[$dataset]}_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_per_list_pca_P0_seed0.index"
+    baseline="$DATA_ROOT/$dataset/index/v10_nlist_${NLIST[$dataset]}_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_per_list_pca_P0_seed0${unit_tag}.index"
+  fi
+  if [[ -n "$CONFIG_FILE" && -f "$baseline" && "$baseline" -ot "$DATA_ROOT/$dataset/origin/${dataset}_base.${INPUT_FORMAT[$dataset]}" ]]; then
+    log "SKIP base IVF older than the exported corpus: $baseline"
+    baseline=""
   fi
   if [[ -f "$baseline" ]] && { ((DRY_RUN)) || python3 "$RESULT_HELPER" index-info "$baseline" \
       --dimension "${DIMENSION[$dataset]}" --nlist "${NLIST[$dataset]}" >/dev/null; }; then
@@ -616,7 +647,7 @@ same_static_config() {
   [[ "${BEST_P[$1]}" == "${PCA_P[$1]}" && "${BEST_SCOPE[$1]}" == "${PCA_SCOPE[$1]}" ]]
 }
 if ((!DRY_RUN)); then
-  printf 'dataset,base_vectors,dimension,available_queries,requested_queries,nlist,ucr_label_status,static_configuration_origin\n' > "$LOG_DIR/input_manifest.csv"
+  printf 'dataset,base_vectors,dimension,available_queries,requested_queries,nlist,ucr_label_status,static_configuration_origin,source_metric,unit_normalization\n' > "$LOG_DIR/input_manifest.csv"
 fi
 # Check every requested input before any expensive index construction begins.
 for dataset in "${ALL_DATASETS[@]}"; do

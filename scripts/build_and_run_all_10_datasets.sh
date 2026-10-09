@@ -9,6 +9,7 @@ CPU_SET="${CPU_SET:-0-31}"
 THREADS="${THREADS:-}"
 PHASE="${PHASE:-all}"
 ONLY_DATASETS="${ONLY_DATASETS:-}"
+CONFIG_FILE="${CONFIG_FILE:-}"
 PERF_BIN="${PERF_BIN:-$ROOT/build-perf/bin/query}"
 STATS_BIN="${STATS_BIN:-$ROOT/build-stats/bin/query}"
 BUILD_JOBS="${BUILD_JOBS:-16}"
@@ -28,6 +29,7 @@ while (($#)); do
     --threads) THREADS="$2"; ARGS+=("$1" "$2"); shift 2 ;;
     --phase) PHASE="$2"; ARGS+=("$1" "$2"); shift 2 ;;
     --datasets) ONLY_DATASETS="$2"; ARGS+=("$1" "$2"); shift 2 ;;
+    --config) CONFIG_FILE="$2"; ARGS+=("$1" "$2"); shift 2 ;;
     --perf-bin) PERF_BIN="$2"; ARGS+=("$1" "$2"); shift 2 ;;
     --stats-bin) STATS_BIN="$2"; ARGS+=("$1" "$2"); shift 2 ;;
     -h|--help)
@@ -87,6 +89,9 @@ else
 fi
 if ((!SKIP_PLOTS)) && [[ "$PHASE" == all ]]; then
   plot=(python3 "$ROOT/scripts/plot_all10_recall_gt09.py" --log-root "$LOG_DIR")
+  if [[ -z "$ONLY_DATASETS" && -n "$CONFIG_FILE" ]]; then
+    ONLY_DATASETS="$(python3 -c 'import json,sys; print(",".join(json.load(open(sys.argv[1]))))' "$CONFIG_FILE")"
+  fi
   [[ -z "$ONLY_DATASETS" ]] || plot+=(--datasets "${ONLY_DATASETS// /,}")
   run env MPLCONFIGDIR="$LOG_DIR/.matplotlib" XDG_CACHE_HOME="$LOG_DIR/.cache" MPLBACKEND=Agg "${plot[@]}"
 fi

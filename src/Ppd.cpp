@@ -63,9 +63,11 @@ void PpdIndex::build(const Index& index, size_t max_training_samples, uint64_t s
                      static_cast<Eigen::Index>(d));
     // Pick one reproducible point from each equal-width stratum. This bounds
     // the sampling skew while still making --seed meaningful.
-    std::vector<size_t> targets(training_samples);
+    // Full training already visits every candidate in order; no N-element
+    // target table is needed (8 GB at N=1 billion).
+    std::vector<size_t> targets(training_samples<total?training_samples:0);
     uint64_t state = seed_value;
-    for (size_t i = 0; i < training_samples; ++i) {
+    for (size_t i = 0; i < targets.size(); ++i) {
         state += 0x9e3779b97f4a7c15ULL;
         uint64_t z = state;
         z = (z ^ (z >> 30U)) * 0xbf58476d1ce4e5b9ULL;
@@ -84,7 +86,7 @@ void PpdIndex::build(const Index& index, size_t max_training_samples, uint64_t s
         const IVF& list = index.lists[list_id];
         const size_t flat_end = flat_begin + list.list_size;
         while (output < training_samples) {
-            const size_t target = targets[output];
+            const size_t target = training_samples==total?output:targets[output];
             if (target >= flat_end) break;
             if (target >= flat_begin) {
                 const size_t local = target - flat_begin;
@@ -99,11 +101,15 @@ void PpdIndex::build(const Index& index, size_t max_training_samples, uint64_t s
     if (output != training_samples) {
         throw std::runtime_error("PPD stratified sampler produced an incomplete sample");
     }
+    std::vector<size_t>().swap(targets);
 
     const Eigen::RowVectorXf mean_row = sample.colwise().mean();
     sample.rowwise() -= mean_row;
     Eigen::MatrixXf covariance =
         (sample.transpose() * sample) / static_cast<float>(training_samples);
+    // Covariance and mean own their storage. Drop the full training matrix
+    // before allocating transformed database vectors, preserving the same PCA.
+    sample.resize(0,0);
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXf> solver(covariance);
     if (solver.info() != Eigen::Success) {
         throw std::runtime_error("PPD PCA eigendecomposition failed");
