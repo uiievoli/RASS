@@ -301,6 +301,9 @@ int main(int argc, char* argv[]) {
     program.add_argument("--load_index")
         .default_value(std::string(""))
         .help("load one existing rich index read-only and select pruning only at search time");
+    program.add_argument("--index_path")
+        .default_value(std::string(""))
+        .help("explicit output/cache index path; permits isolated shared-IVF experiment indexes");
     program.add_argument("--sub_nprobe_ratio")
         .default_value(1.0f)
         .help("ratio of the number of subNNs to the number of clusters")
@@ -313,6 +316,11 @@ int main(int argc, char* argv[]) {
     program.add_argument("--run_faiss").default_value(false).implicit_value(true).help("run faiss");
     program.add_argument("--loop").default_value(1ul).action(
         [](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--warmup_loops").default_value(1ul)
+        .help("untimed search passes before every configuration, including loop=1")
+        .action([](const std::string& value) -> size_t { return std::stoul(value); });
+    program.add_argument("--benchmark_info").default_value(false).implicit_value(true)
+        .help("print timing protocol and statistics build mode without loading data");
     program.add_argument("--nlist").default_value(0ul).action(
         [](const std::string& value) -> size_t { return std::stoul(value); });
     program.add_argument("--verbose").default_value(false).implicit_value(true).help("verbose");
@@ -376,6 +384,17 @@ int main(int argc, char* argv[]) {
         std::cerr << err.what() << std::endl;
         std::cerr << program;
         return 1;
+    }
+
+    if (program.get<bool>("benchmark_info")) {
+        std::cout << "benchmark_protocol=search_only_v2 stats_enabled="
+#ifdef TRIBASE_ENABLE_STATS
+                  << 1
+#else
+                  << 0
+#endif
+                  << std::endl;
+        return 0;
     }
 
     std::vector<size_t> nprobes = program.get<std::vector<size_t>>("nprobes");
@@ -531,6 +550,8 @@ int main(int argc, char* argv[]) {
     bool run_faiss = program.get<bool>("run_faiss");
     MetricType metric;
     size_t loop = program.get<size_t>("loop");
+    const size_t warmup_loops = program.get<size_t>("warmup_loops");
+    if (loop == 0) throw std::invalid_argument("--loop must be positive");
     size_t nlist = program.get<size_t>("nlist");
     bool verbose = program.get<bool>("verbose");
     bool early_stop = program.get<bool>("early_stop");
@@ -583,6 +604,9 @@ int main(int argc, char* argv[]) {
     std::string load_index_path = program.get<std::string>("load_index");
     if (!from_index_path.empty() && !load_index_path.empty()) {
         throw std::invalid_argument("use only one of --from_index and --load_index");
+    }
+    if (!from_index_path.empty() && !std::filesystem::exists(from_index_path)) {
+        throw std::runtime_error("Shared source index does not exist: " + from_index_path);
     }
     float sub_nprobe_ratio = program.get<float>("sub_nprobe_ratio");
 
@@ -687,7 +711,8 @@ int main(int argc, char* argv[]) {
         return std::format("{}/{}/index/faiss_index_nlist_{}{}.index", benchmarks_path, dataset, nlist, unit_tag);
     };
 
-    std::string index_path = get_index_path();
+    std::string index_path = program.get<std::string>("index_path");
+    if (index_path.empty()) index_path = get_index_path();
     std::string faiss_index_path = get_faiss_index_path();
     prepareDirectory(faiss_index_path);
 
@@ -870,13 +895,14 @@ int main(int argc, char* argv[]) {
                                            true, false);
         for (size_t i = 0; i < nprobes.size(); i++) {
             index_faiss->nprobe = nprobes[i];
-            if (loop > 1) {
+            for (size_t warmup = 0; warmup < warmup_loops; ++warmup) {
                 index_faiss->search(nq, query.get(), k, tmp_faiss_dis.get(), tmp_faiss_labels.get());
             }
             Stopwatch stopwatch;
             for (size_t j = 0; j < loop; j++) {
                 index_faiss->search(nq, query.get(), k, tmp_faiss_dis.get(), tmp_faiss_labels.get());
             }
+            faiss_time[i] = stopwatch.elapsedSeconds() / loop;
             float recall = external_groundtruth
                 ? calculate_id_recall(tmp_faiss_labels.get(), ground_truth_I.get(), nq, k,
                                       ground_truth_width)
@@ -886,7 +912,6 @@ int main(int argc, char* argv[]) {
                 ? std::numeric_limits<float>::quiet_NaN()
                 : calculate_r2(tmp_faiss_labels.get(), tmp_faiss_dis.get(), ground_truth_I.get(),
                                ground_truth_D.get(), nq, k, metric);
-            faiss_time[i] = stopwatch.elapsedSeconds() / loop;
             double qps = static_cast<double>(nq) / faiss_time[i];
             std::cout << std::format("Faiss nprobe: {} time: {} qps: {} recall: {} r2: {}", nprobes[i], faiss_time[i],
                                      qps, recall, r2)
@@ -999,6 +1024,9 @@ int main(int argc, char* argv[]) {
             std::cout << std::format("Upgrading pruning from {}", from_index_path) << std::endl;
         }
         index.load_index(from_index_path);
+        if (index.d != d || index.nlist != nlist || index.metric != metric) {
+            throw std::runtime_error("Shared source index dimensions/nlist/metric do not match this experiment");
+        }
         index.sub_k = subk;
         index.sub_nlist = sub_nlist;
         index.sub_nprobe = sub_nprobe;
@@ -1136,6 +1164,9 @@ int main(int argc, char* argv[]) {
             std::cout << std::format("Index saved to {}", index_path) << std::endl;
         }
     }
+    if (index.d != d || index.nlist != nlist || index.metric != metric) {
+        throw std::runtime_error("Loaded index dimensions/nlist/metric do not match this experiment");
+    }
     if (multipivot_enabled) {
         index.write_pivot_manifest(pivot_manifest_path, dataset, true);
     }
@@ -1219,7 +1250,8 @@ int main(int argc, char* argv[]) {
         if (verbose) {
             std::cout << std::format("Dumping per-list stats to {}", dump_list_stats_path) << std::endl;
         }
-        // Warmup would overwrite list_visits; force single pass when dumping.
+        // Keep one measured pass when dumping. Warmup statistics are discarded,
+        // so only the final measured pass supplies list_visits.
         if (loop > 1) {
             std::cerr << "Warning: --dump_list_stats forces loop=1 (was " << loop << ")" << std::endl;
             loop = 1;
@@ -1264,14 +1296,19 @@ int main(int argc, char* argv[]) {
                                 multiPivotModeName(multipivot_mode), pivot_count, k, ratio, output_format);
                 std::unique_ptr<float[]> distances = std::make_unique<float[]>(nq * k);
                 std::unique_ptr<idx_t[]> labels = std::make_unique<idx_t[]>(nq * k);
-                if (loop > 1) {
+                Stopwatch warmup_stopwatch;
+                for (size_t warmup = 0; warmup < warmup_loops; ++warmup) {
                     index.search(nq, query.get(), k, distances.get(), labels.get(), ratio);
                 }
+                const double warmup_seconds = warmup_stopwatch.elapsedSeconds();
                 Stopwatch stopwatch;
                 Stats stats;
                 for (size_t j = 0; j < loop; j++) {
                     stats = index.search(nq, query.get(), k, distances.get(), labels.get(), ratio);
                 }
+                // Freeze the search timer before recall/r2 launch their own work.
+                const double search_time = stopwatch.elapsedSeconds() / loop;
+                Stopwatch evaluation_stopwatch;
                 float recall = external_groundtruth
                     ? calculate_id_recall(labels.get(), ground_truth_I.get(), nq, k, ground_truth_width)
                     : calculate_recall(labels.get(), distances.get(), ground_truth_I.get(),
@@ -1280,7 +1317,11 @@ int main(int argc, char* argv[]) {
                     ? std::numeric_limits<float>::quiet_NaN()
                     : calculate_r2(labels.get(), distances.get(), ground_truth_I.get(),
                                    ground_truth_D.get(), nq, k, metric);
-                double search_time = stopwatch.elapsedSeconds() / loop;
+                stats.benchmark_protocol = "search_only_v2";
+                stats.measurement_loops = loop;
+                stats.warmup_loops = warmup_loops;
+                stats.warmup_seconds = warmup_seconds;
+                stats.evaluation_seconds = evaluation_stopwatch.elapsedSeconds();
                 stats.n_query = nq;
                 stats.simi_ratio = ratio;
                 stats.nlist = nlist;

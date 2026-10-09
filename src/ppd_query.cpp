@@ -107,6 +107,11 @@ int main(int argc, char** argv) {
     std::vector<float> distances(nq * k);
     std::vector<idx_t> labels(nq * k);
     for (size_t nprobe : nprobes) {
+        // Match query.cpp: exclude one warm-up pass when timing repeats.
+        if (loop > 1) {
+            searchPpd(index, ppd, nq, queries.get(), k, nprobe, block_size,
+                      triangle, distances.data(), labels.data());
+        }
         PpdSearchStats stats;
         double seconds = 0.0;
         double projection_seconds = 0.0;

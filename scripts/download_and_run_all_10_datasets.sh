@@ -14,6 +14,10 @@ COARSE_HNSW_EF_CONSTRUCTION="${COARSE_HNSW_EF_CONSTRUCTION:-200}"
 COARSE_HNSW_EF_SEARCH="${COARSE_HNSW_EF_SEARCH:-128}"
 PHASE="${PHASE:-all}"
 ONLY_DATASETS="${ONLY_DATASETS:-}"
+PERF_REPEATS="${PERF_REPEATS:-3}"
+WARMUP_LOOPS="${WARMUP_LOOPS:-1}"
+PIVOT_SEED="${PIVOT_SEED:-0}"
+OMP_WAIT_POLICY="${OMP_WAIT_POLICY:-PASSIVE}"
 SKIP_BUILD=0
 DRY_RUN=0
 
@@ -37,6 +41,10 @@ Options:
   --coarse-hnsw-ef-search N
                         HNSW assignment breadth (default 128).
   --phase NAME          all (default), perf, or stats.
+  --perf-repeats N      Independent perf processes, default 3; use the median.
+  --warmup-loops N      Untimed searches per configuration, default 1.
+  --pivot-seed N        PCA seed, default 0.
+  --omp-wait-policy P   PASSIVE (default) or ACTIVE.
   --datasets LIST       Comma/space-separated subset of the eight datasets.
   --skip-build          Require existing build-perf/build-stats binaries.
   --dry-run             Print every download, build and experiment command.
@@ -59,6 +67,10 @@ while (($#)); do
     --coarse-hnsw-ef-construction) COARSE_HNSW_EF_CONSTRUCTION="$2"; shift 2 ;;
     --coarse-hnsw-ef-search) COARSE_HNSW_EF_SEARCH="$2"; shift 2 ;;
     --phase) PHASE="$2"; shift 2 ;;
+    --perf-repeats) PERF_REPEATS="$2"; shift 2 ;;
+    --warmup-loops) WARMUP_LOOPS="$2"; shift 2 ;;
+    --pivot-seed) PIVOT_SEED="$2"; shift 2 ;;
+    --omp-wait-policy) OMP_WAIT_POLICY="$2"; shift 2 ;;
     --datasets) ONLY_DATASETS="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -70,6 +82,11 @@ done
 [[ -n "${DATA_ROOT}" ]] || { echo "--data-root is required" >&2; exit 2; }
 [[ -n "${LOG_DIR}" ]] || { echo "--log-dir is required" >&2; exit 2; }
 [[ "${PHASE}" =~ ^(all|perf|stats)$ ]] || { echo "invalid --phase: ${PHASE}" >&2; exit 2; }
+for value in "$PERF_REPEATS" "$WARMUP_LOOPS"; do
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || { echo "repeats/warmups must be positive" >&2; exit 2; }
+done
+[[ "$PIVOT_SEED" =~ ^[0-9]+$ ]] || { echo "invalid --pivot-seed" >&2; exit 2; }
+[[ "$OMP_WAIT_POLICY" =~ ^(PASSIVE|ACTIVE)$ ]] || { echo "invalid --omp-wait-policy" >&2; exit 2; }
 command -v taskset >/dev/null || { echo "taskset is required" >&2; exit 1; }
 if [[ -z "${THREADS}" ]]; then
   THREADS="$(taskset -c "${CPU_SET}" nproc)" || {
@@ -134,6 +151,8 @@ experiment_args=(
   --coarse-hnsw-ef-construction "${COARSE_HNSW_EF_CONSTRUCTION}"
   --coarse-hnsw-ef-search "${COARSE_HNSW_EF_SEARCH}"
   --phase "${PHASE}"
+  --perf-repeats "${PERF_REPEATS}" --warmup-loops "${WARMUP_LOOPS}"
+  --pivot-seed "${PIVOT_SEED}" --omp-wait-policy "${OMP_WAIT_POLICY}"
 )
 [[ -n "${ONLY_DATASETS}" ]] && experiment_args+=(--datasets "${ONLY_DATASETS}")
 ((DRY_RUN)) && experiment_args+=(--dry-run)
@@ -143,7 +162,7 @@ if ((!DRY_RUN)) && [[ "${PHASE}" == all && -z "${ONLY_DATASETS}" ]]; then
   if python3 -c 'import matplotlib' >/dev/null 2>&1; then
     echo "[$(date -Is)] PLOT recall > 0.9"
     MPLCONFIGDIR="${LOG_DIR}/.matplotlib" python3 \
-      "${ROOT}/scripts/plot_all10_recall_gt09.py" --log-root "${LOG_DIR}"
+      "${ROOT}/scripts/plot_all8_recall_gt09.py" --log-root "${LOG_DIR}"
   else
     echo "[$(date -Is)] WARNING matplotlib is unavailable; CSV results are complete but plots were skipped" >&2
   fi

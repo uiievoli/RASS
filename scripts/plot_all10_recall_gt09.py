@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot the active eight-dataset results, restricted to recall > 0.9."""
+"""Plot all ten datasets, restricted to recall > 0.9."""
 
 from __future__ import annotations
 
@@ -19,9 +19,11 @@ DATASETS = [
     "msong_holdout",
     "sift1m",
     "glove25",
+    "HandOutlines",
     "StarLightCurves",
     "dbpedia1536m_holdout",
     "sift1b",
+    "spacev1b",
 ]
 
 DISPLAY = {
@@ -30,9 +32,11 @@ DISPLAY = {
     "msong_holdout": "MillionSong",
     "sift1m": "SIFT1M",
     "glove25": "GloVe-25",
+    "HandOutlines": "HandOutlines",
     "StarLightCurves": "StarLightCurves",
     "dbpedia1536m_holdout": "DBpedia-1536",
     "sift1b": "SIFT1B",
+    "spacev1b": "SpaceV (static ref. P=11)",
 }
 
 METHODS = ["baseline", "triangle", "pca10", "static_best", "dynamic"]
@@ -58,7 +62,7 @@ MARKER = {
     "dynamic": "P",
 }
 
-LARGE_RECALL_AT = {"sift1b": 10}
+LARGE_RECALL_AT = {"sift1b": 10, "spacev1b": 10}
 
 
 def number(row: dict[str, str], key: str, default: float = math.nan) -> float:
@@ -368,7 +372,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--datasets",
-        help="Comma-separated dataset names; defaults to the active eight-dataset order",
+        help="Comma-separated dataset names; defaults to all ten datasets",
     )
     args = parser.parse_args()
     if args.datasets:

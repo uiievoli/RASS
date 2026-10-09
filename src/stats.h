@@ -106,7 +106,7 @@ class Stats {
     size_t microblock_checks;
     size_t microblock_pruned;          // blocks pruned
     size_t microblock_vectors_pruned;  // vectors covered by pruned blocks
-    // Mutually exclusive worker CPU-time decomposition:
+    // Mutually exclusive worker wall-time decomposition (includes descheduling):
     // - query_signature: query-to-center work plus U(q-c), once globally or per probed list;
     // - candidate_decision: scan_codes, including MP decisions, surviving L2 distances and heap updates;
     // - other: coarse centroid search, triangle/microblock setup, sorting and loop overhead.
@@ -126,6 +126,12 @@ class Stats {
 
     double faiss_query_time;
     double query_time;
+    // Benchmark metadata is assigned after search; never part of stage totals.
+    std::string benchmark_protocol;
+    size_t measurement_loops = 0;
+    size_t warmup_loops = 0;
+    double warmup_seconds = 0;
+    double evaluation_seconds = 0;
 
     OptLevel opt_level;
     MultiPivotMode multipivot_mode = MultiPivotMode::NONE;
@@ -295,7 +301,9 @@ class Stats {
                           "candidate_decision_us_per_query", "other_us_per_query",
                           "query_signature_share", "candidate_decision_share", "other_share",
                           "time_speedup", "pruning_speedup", "query_time", "qps",
-                          "recall", "r2"},
+                          "recall", "r2", "benchmark_protocol", "measurement_loops",
+                          "warmup_loops", "warmup_seconds", "evaluation_seconds", "n_query",
+                          "benchmark_stats_enabled"},
                          append, false);
         summary();
         writer << dataset << nlist << nprobe << static_cast<int>(opt_level)
@@ -323,7 +331,14 @@ class Stats {
                << (search_worker_seconds == 0 ? 0.0 : candidate_decision_seconds / search_worker_seconds)
                << (search_worker_seconds == 0 ? 0.0 : other_seconds / search_worker_seconds)
                << time_speedup / 100 << pruning_speedup / 100 << query_time << qps
-               << recall << r2 << std::endl;
+               << recall << r2 << benchmark_protocol << measurement_loops << warmup_loops
+               << warmup_seconds << evaluation_seconds << n_query
+#ifdef TRIBASE_ENABLE_STATS
+               << 1
+#else
+               << 0
+#endif
+               << std::endl;
     }
 };
 

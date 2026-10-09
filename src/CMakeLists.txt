@@ -25,6 +25,12 @@ target_link_libraries(query Tribase faiss)
 add_executable(ppd_query ppd_query.cpp)
 target_link_libraries(ppd_query Tribase faiss)
 
+add_executable(prune_comparison prune_comparison.cpp)
+target_link_libraries(prune_comparison Tribase faiss)
+
+add_executable(index_build_benchmark index_build_benchmark.cpp)
+target_link_libraries(index_build_benchmark Tribase faiss)
+
 add_executable(import_legacy_index import_legacy_index.cpp)
 target_link_libraries(import_legacy_index Tribase faiss)
 
