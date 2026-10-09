@@ -1,0 +1,38 @@
+{
+  "fasion_mnist_784": {
+    "global": {"pivot_count": 64, "status": "best_tested_coarse_grid", "reference_nprobe": 7, "reference_recall": 0.9916, "source": "logs/log/global_perlist_stage1/perf/fasion_mnist_784/global_static_rep*.csv"},
+    "per_list": {"pivot_count": 48, "status": "best_tested_fine_grid", "reference_nprobe": 7, "reference_recall": 0.9916, "source": "logs/fine_pivot_screen_8_20261004/perf/fasion_mnist_784/per_list_static_rep*.csv"}
+  },
+  "msong_holdout": {
+    "global": {"pivot_count": 64, "status": "best_tested_coarse_grid", "reference_nprobe": 20, "reference_recall": 0.996, "source": "logs/log/global_perlist_stage1/perf/msong_holdout/global_static_rep*.csv"},
+    "per_list": {"pivot_count": 34, "status": "best_tested_fine_grid", "reference_nprobe": 16, "reference_recall": 0.99, "source": "logs/fine_pivot_screen_8_20261004/perf/msong_holdout/per_list_static_rep*.csv"}
+  },
+  "sift1m": {
+    "global": {"pivot_count": 36, "status": "best_tested_below_recall_0.99", "reference_nprobe": 30, "reference_recall": 0.9879, "source": "logs/log/sift1m_global_perlist_cost_nprobe30.csv"},
+    "per_list": {"pivot_count": 23, "status": "best_tested_fine_grid", "reference_nprobe": 34, "reference_recall": 0.9904, "source": "logs/fine_pivot_screen_8_20261004/perf/sift1m/per_list_static_rep*.csv"}
+  },
+  "glove25": {
+    "global": {"pivot_count": 14, "status": "best_tested_fine_grid", "reference_nprobe": 50, "reference_recall": 0.9903, "source": "logs/fine_pivot_screen_8_20261004/perf/glove25/global_static_rep*.csv"},
+    "per_list": {"pivot_count": 8, "status": "best_tested_coarse_grid", "reference_nprobe": 50, "reference_recall": 0.9903, "source": "logs/log/global_perlist_stage1/perf/glove25/per_list_static_rep*.csv"}
+  },
+  "HandOutlines": {
+    "global": {"pivot_count": 7, "status": "best_tested_fine_grid", "reference_nprobe": 4, "reference_recall": 0.9973, "source": "logs/fine_pivot_screen_8_20261004/perf/HandOutlines/global_static_rep*.csv"},
+    "per_list": {"pivot_count": 4, "status": "best_tested_coarse_grid", "reference_nprobe": 5, "reference_recall": 1.0, "source": "logs/log/global_perlist_stage1/perf/HandOutlines/per_list_static_rep*.csv"}
+  },
+  "StarLightCurves": {
+    "global": {"pivot_count": 18, "status": "best_tested_fine_grid", "reference_nprobe": 4, "reference_recall": 0.99, "source": "logs/fine_pivot_screen_8_20261004/perf/StarLightCurves/global_static_rep*.csv"},
+    "per_list": {"pivot_count": 16, "status": "best_tested_coarse_grid", "reference_nprobe": 5, "reference_recall": 0.994, "source": "logs/log/global_perlist_stage1/perf/StarLightCurves/per_list_static_rep*.csv"}
+  },
+  "dbpedia1536m_holdout": {
+    "global": {"pivot_count": 128, "status": "best_tested_coarse_grid", "reference_nprobe": 150, "reference_recall": 0.99, "source": "logs/log/global_perlist_stage1/perf/dbpedia1536m_holdout/global_static_rep*.csv"},
+    "per_list": {"pivot_count": 128, "status": "best_tested_fine_grid", "reference_nprobe": 160, "reference_recall": 0.991, "source": "logs/fine_pivot_screen_8_20261004/perf/dbpedia1536m_holdout/per_list_static_rep*.csv"}
+  },
+  "sift1b": {
+    "global": {"pivot_count": 16, "status": "existing_experiment_configuration_not_exhaustive_optimum", "source": "scripts/run_all_10_datasets.sh:BEST_P"},
+    "per_list": {"pivot_count": 16, "status": "untuned_comparison_preset", "source": "No validated per-list SIFT1B optimum is available; use P16 for the construction comparison only"}
+  },
+  "nuswide": {
+    "global": {"pivot_count": 3, "status": "best_tested_fine_grid", "reference_nprobe": 3, "reference_recall": 0.99, "source": "logs/fine_pivot_screen_8_20261004/perf/nuswide/global_static_rep*.csv"},
+    "per_list": {"pivot_count": 2, "status": "best_tested_fine_grid", "reference_nprobe": 3, "reference_recall": 0.99, "source": "logs/fine_pivot_screen_8_20261004/perf/nuswide/per_list_static_rep*.csv"}
+  }
+}

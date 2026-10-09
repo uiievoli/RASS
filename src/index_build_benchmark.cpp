@@ -22,6 +22,8 @@ int main(int argc, char** argv) {
     args.add_argument("--out").required();
     args.add_argument("--nlist").scan<'u',size_t>().default_value(size_t{1000});
     args.add_argument("--pivot-count").scan<'u',size_t>().default_value(size_t{16});
+    args.add_argument("--global-pivot-count").scan<'u',size_t>().default_value(size_t{0});
+    args.add_argument("--per-list-pivot-count").scan<'u',size_t>().default_value(size_t{0});
     args.add_argument("--seed").scan<'u',uint64_t>().default_value(uint64_t{0});
     args.add_argument("--ppd-train-samples").scan<'u',size_t>().default_value(size_t{0});
     args.add_argument("--pca-without-triangle").flag();
@@ -32,9 +34,12 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Output must be a new or empty repeat directory");
         std::filesystem::create_directories(out);
         const size_t nlist=args.get<size_t>("--nlist"), P=args.get<size_t>("--pivot-count");
+        const size_t global_P=args.get<size_t>("--global-pivot-count")?args.get<size_t>("--global-pivot-count"):P;
+        const size_t per_list_P=args.get<size_t>("--per-list-pivot-count")?args.get<size_t>("--per-list-pivot-count"):P;
         size_t n=0; int dim=0; std::unique_ptr<float[]> base;
         const double input_seconds=timed([&]{std::tie(base,n,dim)=loadXvecs(args.get<std::string>("--base"));});
-        if (nlist==0 || n<nlist || P<2 || P>512 || P>static_cast<size_t>(dim)+1)
+        const auto valid_P=[&](size_t p){return p>=2 && p<=512 && p<=static_cast<size_t>(dim)+1;};
+        if (nlist==0 || n<nlist || !valid_P(global_P) || !valid_P(per_list_P))
             throw std::invalid_argument("Require 0<nlist<=N, 2<=P<=min(512,D+1)");
         const bool triangle=!args.get<bool>("--pca-without-triangle");
         const auto source=out/"ivf.index";
@@ -68,6 +73,7 @@ int main(int argc, char** argv) {
         const auto base_bytes=std::filesystem::file_size(source);
         row("ivf",0,0,0,0,0,0,0,0,0,0,base_bytes);
         for (const std::string method:{"tribase_triangle","ppd","pca_per_list","pca_global"}) {
+            const size_t method_P=method=="pca_global"?global_P:per_list_P;
             std::cout<<"START "<<method<<std::endl;
             Index index;
             const double reload=timed([&]{index.load_index(source.string());});
@@ -88,7 +94,7 @@ int main(int argc, char** argv) {
                     tri_time=timed([&]{index.ensure_triangle_radii();index.opt_level=OptLevel::OPT_TRIANGLE;});
                 if (method!="tribase_triangle") {
                     index.configure_multipivot(method=="pca_global"?MultiPivotScope::GLOBAL:MultiPivotScope::PER_LIST,
-                                              "pca",P,args.get<uint64_t>("--seed"));
+                                              "pca",method_P,args.get<uint64_t>("--seed"));
                     index.rebuild_multipivot_metadata();
                     selection=index.multipivot_selection_seconds;
                     signature=index.multipivot_candidate_distance_seconds;
@@ -97,7 +103,7 @@ int main(int argc, char** argv) {
                 save=timed([&]{index.save_index(destination.string());});
                 bytes=std::filesystem::file_size(destination);
             }
-            row(method,method=="tribase_triangle"?1:method=="ppd"?0:P,ppd_samples,
+            row(method,method=="tribase_triangle"?1:method=="ppd"?0:method_P,ppd_samples,
                 method=="tribase_triangle"?1:method=="ppd"?0:triangle,reload,
                 tri_time,selection,signature,ppd_time,extra,save,bytes);
         }

@@ -6,7 +6,6 @@ Run from the repository root:
 python3 scripts/run_index_build_comparison.py \
   --data-root /mnt/nvme/wxy/benchmarks \
   --log-dir logs/index_build_eight \
-  --pivot-count 16 \
   --cpus 0-31 --threads 32 --repeats 3
 ```
 
@@ -23,8 +22,50 @@ To run only SIFT1M, add `--datasets sift1m`.
 
 Multiple datasets: `--datasets "sift1m,msong_holdout,nuswide"`. Each dataset uses
 its configured nlist (1000, 1000, 512 respectively). Use `--nlist` to override.
-Global/per-list use the same P; P includes the center, so P=16 means 15 projection
-coordinates. Use separate invocations/output roots to compare different P.
+Global/per-list use separate dataset-specific tested-best P defaults from
+`scripts/index_build_pivot_defaults.json`. The file ships with the repository;
+the referenced experiment logs are evidence, not required runtime inputs.
+Resolved P values and their evidence/status are saved in config.json.
+P includes the center, so P=16 means 15 projection coordinates.
+
+| Dataset | Global P | Per-list P |
+|---|---:|---:|
+| Fashion-MNIST | 64 | 48 |
+| MillionSong | 64 | 34 |
+| SIFT1M | 36 | 23 |
+| GloVe25 | 14 | 8 |
+| HandOutlines | 7 | 4 |
+| StarLightCurves | 18 | 16 |
+| DBpedia1536 | 128 | 128 |
+| SIFT1B | 16 | 16 (untuned comparison preset) |
+
+Defaults use the median-QPS winner at the first available nprobe achieving
+recall >= 0.99 within each scope's archived k=1 experiment. Fine sweeps take
+precedence; absent fine sweeps use the coarse grid. SIFT1M/global instead uses
+the dense nprobe=30 experiment (recall=0.9879), because no matching >=0.99 sweep
+is available in those logs. These are best tested points, not universal optima
+for every k/nprobe/hardware. Some scopes have different reference nprobe values.
+SIFT1B/global retains the existing P16 experiment configuration; SIFT1B/per-list
+has no validated optimum and is explicitly marked untuned rather than best.
+
+Override both with `--pivot-count N`, or independently use
+`--global-pivot-count N --per-list-pivot-count M`. A custom dataset requires
+overrides or its own `--pivot-presets /path/config.json` entry. Use separate
+output roots when changing settings.
+
+## Other hyperparameters
+
+All methods share nlist, L2 metric and identical IVF partitions. Native
+clustering uses the existing Index::train defaults: 20 Lloyd iterations, seed
+6666 and at most 256 training points per centroid. The benchmark `--seed`
+controls pruning/PCA sampling metadata and does not override that IVF seed.
+Tribase here means OPT_TRIANGLE (one centroid pivot), not OPT_ALL with SubNN
+hyperparameters. PPD uses all D PCA directions and default full-database PCA
+training; `--ppd-train-samples` changes training cost. PPD block size B controls
+query-time checkpoints only, so it is irrelevant to this construction-only
+benchmark. The two PCA methods use their own P, scope and float32 signatures,
+and by default include Triangle preparation. `--pca-without-triangle` is an
+explicit ablation. No query k or nprobe is executed in the construction run.
 
 Default layout: `DATA_ROOT/DATASET/origin/DATASET_base.fvecs`. For another input
 file use `--datasets custom --base-file /path/base.fvecs --nlist 1000`.

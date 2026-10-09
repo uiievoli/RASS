@@ -22,7 +22,11 @@ p.add_argument('--datasets', default=','.join(DEFAULT_DATASETS),
 p.add_argument('--base-file', help='Explicit input vector file (one dataset only); fvecs/bvecs/i8bin')
 p.add_argument('--sift1b-dir', help='Override the raw SIFT1B directory containing bigann_base.bvecs')
 p.add_argument('--nlist',type=int,help='Override nlist for all selected datasets')
-p.add_argument('--pivot-count',type=int,default=16,help='Same P for global/per-list; includes center')
+p.add_argument('--pivot-presets',default=str(ROOT/'scripts/index_build_pivot_defaults.json'),
+               help='Dataset-specific tested-best pivot defaults and evidence')
+p.add_argument('--pivot-count',type=int,help='Optional override of both scopes; includes center')
+p.add_argument('--global-pivot-count',type=int,help='Optional override of global PCA P')
+p.add_argument('--per-list-pivot-count',type=int,help='Optional override of per-list PCA P')
 p.add_argument('--ppd-train-samples',type=int,default=0,help='0 = PCA on all database vectors')
 p.add_argument('--repeats',type=int,default=3)
 p.add_argument('--threads',type=int,default=32)
@@ -37,17 +41,32 @@ a=p.parse_args()
 datasets=a.datasets.replace(',',' ').split()
 if not datasets or len(set(datasets))!=len(datasets): p.error('Specify unique datasets')
 if a.base_file and len(datasets)!=1: p.error('--base-file requires exactly one dataset')
-if min(a.repeats,a.threads,a.build_jobs)<1 or not 2<=a.pivot_count<=512 or a.ppd_train_samples<0 or a.seed<0:
+if min(a.repeats,a.threads,a.build_jobs)<1 or any(v is not None and not 2<=v<=512 for v in [a.pivot_count,a.global_pivot_count,a.per_list_pivot_count]) or a.ppd_train_samples<0 or a.seed<0:
     p.error('Invalid repeats/threads/build-jobs/pivot-count/PCA sample count/seed')
+if a.pivot_count is not None and (a.global_pivot_count is not None or a.per_list_pivot_count is not None):
+    p.error('Use --pivot-count alone, or the two scope-specific overrides')
+presets=json.loads(Path(a.pivot_presets).read_text())
 env=os.environ.copy()
 env.update(OMP_NUM_THREADS=str(a.threads),OMP_PROC_BIND='close',OMP_PLACES='cores')
 env.pop('TRIBASE_TRACE',None);env.pop('EDGE_DEVICE_ENABLED',None)
 out=Path(a.log_dir).resolve();data=Path(a.data_root).resolve();binary=Path(a.bin).resolve()
-jobs=[]
+jobs=[];resolved_pivots={}
 for dataset in datasets:
     if Path(dataset).name!=dataset or dataset in {'.','..'}: p.error('Dataset must be a directory name')
     nlist=a.nlist or NLIST.get(dataset)
     if not nlist or nlist<1: p.error(f'Specify --nlist for {dataset}')
+    setting={}
+    for scope,override in [('global',a.global_pivot_count),('per_list',a.per_list_pivot_count)]:
+        value=a.pivot_count if a.pivot_count is not None else override
+        if value is not None:
+            setting[scope]={'pivot_count':value,'status':'manual_override'}
+        else:
+            if dataset not in presets or scope not in presets[dataset]:
+                p.error(f'No tested default for {dataset}/{scope}; specify pivot override or a preset file')
+            setting[scope]=dict(presets[dataset][scope])
+        if not 2<=setting[scope]['pivot_count']<=512:
+            p.error(f'Invalid preset for {dataset}/{scope}')
+    resolved_pivots[dataset]=setting
     if a.base_file:
         candidates=[Path(a.base_file).resolve()]
     elif dataset=='sift1b':
@@ -62,7 +81,8 @@ for dataset in datasets:
     for rep in range(1,a.repeats+1):
         directory=out/dataset/f'rep{rep}'
         cmd=['taskset','-c',a.cpus,str(binary),'--base',str(base),'--out',str(directory),
-             '--nlist',str(nlist),'--pivot-count',str(a.pivot_count),'--seed',str(a.seed),
+             '--nlist',str(nlist),'--global-pivot-count',str(setting['global']['pivot_count']),
+             '--per-list-pivot-count',str(setting['per_list']['pivot_count']),'--seed',str(a.seed),
              '--ppd-train-samples',str(a.ppd_train_samples)]
         if a.pca_without_triangle: cmd.append('--pca-without-triangle')
         jobs.append((dataset,rep,directory,cmd))
@@ -71,7 +91,7 @@ if a.dry_run:
     for _,_,_,cmd in jobs: print(shlex.join(cmd))
     raise SystemExit(0)
 out.mkdir(parents=True,exist_ok=True)
-config=vars(a).copy();config['protocol']='shared_ivf_build_v1'
+config=vars(a).copy();config['protocol']='shared_ivf_build_v1';config['resolved_pivots']=resolved_pivots
 config_path=out/'config.json'
 if config_path.exists() and json.loads(config_path.read_text())!=config:
     p.error('Output has a different configuration; use a new --log-dir')
