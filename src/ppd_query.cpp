@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Index.h"
+#include "ExternalGroundTruth.h"
 #include "Ppd.h"
 #include "utils.h"
 
@@ -30,6 +31,10 @@ int main(int argc, char** argv) {
     program.add_argument("--train-samples").scan<'u', size_t>().default_value(size_t{65536});
     program.add_argument("--seed").scan<'u', uint64_t>().default_value(uint64_t{6666});
     program.add_argument("--loop").scan<'u', size_t>().default_value(size_t{1});
+    program.add_argument("--warmup-loops").scan<'u', size_t>().default_value(size_t{1});
+    program.add_argument("--normalize").flag().help("normalize queries before timing; requires a unit-vector IVF index");
+    program.add_argument("--build-only").flag().help("prepare/load sidecar and exit before search");
+    program.add_argument("--dump-search-results").default_value(std::string{});
     program.add_argument("--triangle").flag();
     program.add_argument("--rebuild-sidecar").flag();
     program.add_argument("--csv").default_value(std::string{});
@@ -51,6 +56,8 @@ int main(int argc, char** argv) {
     const uint64_t seed = program.get<uint64_t>("--seed");
     const size_t loop = program.get<size_t>("--loop");
     const bool triangle = program.get<bool>("--triangle");
+    const bool normalize = program.get<bool>("--normalize");
+    const size_t warmups = program.get<size_t>("--warmup-loops");
     const auto nprobes = program.get<std::vector<size_t>>("--nprobes");
     if (k == 0 || block_size == 0 || loop == 0) {
         throw std::invalid_argument("k, block-size, and loop must be positive");
@@ -61,6 +68,19 @@ int main(int argc, char** argv) {
     if (index.metric != MetricType::METRIC_L2) {
         throw std::invalid_argument("The paper's PPD reproduction supports L2 only");
     }
+    if (normalize) {
+        // Cheap guard against accidentally attaching cosine queries to raw L2
+        // base vectors. The source-bank identity is additionally bound by the driver.
+        for (size_t lid = 0; lid < index.nlist; ++lid) {
+            const IVF& list = index.lists[lid];
+            if (!list.list_size) continue;
+            const float* x = list.get_candidate_codes(0);
+            double norm2 = 0;
+            for (size_t axis = 0; axis < index.d; ++axis) norm2 += double(x[axis])*x[axis];
+            if (std::abs(norm2-1.0) > 1e-4)
+                throw std::invalid_argument("--normalize requires an already normalized IVF base index");
+        }
+    }
     PpdIndex ppd;
     const bool rebuild = program.get<bool>("--rebuild-sidecar");
     if (!rebuild && std::filesystem::exists(sidecar_path)) {
@@ -69,12 +89,19 @@ int main(int argc, char** argv) {
     } else {
         std::cout << std::format("Building PPD sidecar: samples={} d={} lists={}\n",
                                  train_samples, index.d, index.nlist);
-        ppd.build(index, train_samples, seed);
+        ppd.build(index, train_samples == 0 ? std::numeric_limits<size_t>::max() : train_samples, seed);
         const std::string partial = sidecar_path + ".partial";
         ppd.save(partial);
         std::filesystem::rename(partial, sidecar_path);
         std::cout << "Saved PPD sidecar " << sidecar_path << std::endl;
     }
+    if (train_samples == 0) {
+        size_t base_count = 0;
+        for (size_t lid = 0; lid < index.nlist; ++lid) base_count += index.lists[lid].list_size;
+        if (ppd.training_samples != base_count)
+            throw std::invalid_argument("--train-samples 0 requires a full-training sidecar; rebuild the sampled sidecar");
+    }
+    if (program.get<bool>("--build-only")) return 0;
 
     auto [queries, available_nq, query_d] = loadXvecs(query_path);
     if (static_cast<size_t>(query_d) != index.d) {
@@ -83,12 +110,21 @@ int main(int argc, char** argv) {
     size_t nq = program.get<size_t>("--nq");
     if (nq == 0) nq = available_nq;
     nq = std::min(nq, available_nq);
+    if (nq == 0) throw std::invalid_argument("query file contains no queries");
+    if (normalize) normalizeL2InPlace(queries.get(), nq, index.d);
     std::vector<idx_t> gt_ids;
     std::vector<float> gt_distances;
+    ExternalGroundTruth external_gt;
+    const bool external = gt_path.ends_with(".i32bin") || gt_path.ends_with(".ivecs");
     if (!gt_path.empty()) {
-        gt_ids.resize(nq * k);
-        gt_distances.resize(nq * k);
-        loadResults(gt_path, gt_ids.data(), gt_distances.data(), nq, k);
+        if (external) {
+            external_gt = load_external_groundtruth(gt_path, nq);
+            if (k > external_gt.width) throw std::invalid_argument("k exceeds official groundtruth width");
+        } else {
+            gt_ids.resize(nq * k);
+            gt_distances.resize(nq * k);
+            loadResults(gt_path, gt_ids.data(), gt_distances.data(), nq, k);
+        }
     }
 
     std::unique_ptr<CsvWriter> output;
@@ -101,14 +137,15 @@ int main(int argc, char** argv) {
                 "ppd_checked", "ppd_pruned", "full_distances", "dimensions",
                 "equivalent_distance_computations", "ppd_prune_rate",
                 "projection_us_per_query", "coarse_us_per_query",
-                "verification_us_per_query"},
+                "verification_us_per_query", "overall_prune_rate", "n_query", "normalize",
+                "measurement_loops", "warmup_loops", "benchmark_protocol", "benchmark_stats_enabled"},
             false, false);
     }
     std::vector<float> distances(nq * k);
     std::vector<idx_t> labels(nq * k);
     for (size_t nprobe : nprobes) {
         // Match query.cpp: exclude one warm-up pass when timing repeats.
-        if (loop > 1) {
+        for (size_t warmup = 0; warmup < warmups; ++warmup) {
             searchPpd(index, ppd, nq, queries.get(), k, nprobe, block_size,
                       triangle, distances.data(), labels.data());
         }
@@ -118,9 +155,10 @@ int main(int argc, char** argv) {
         double coarse_seconds = 0.0;
         double verification_seconds = 0.0;
         for (size_t iteration = 0; iteration < loop; ++iteration) {
+            Stopwatch search_watch;
             stats = searchPpd(index, ppd, nq, queries.get(), k, nprobe, block_size,
                               triangle, distances.data(), labels.data());
-            seconds += stats.total_seconds;
+            seconds += search_watch.elapsedSeconds();
             projection_seconds += stats.projection_seconds;
             coarse_seconds += stats.coarse_seconds;
             verification_seconds += stats.verification_seconds;
@@ -129,7 +167,8 @@ int main(int argc, char** argv) {
         projection_seconds /= loop;
         coarse_seconds /= loop;
         verification_seconds /= loop;
-        const float recall = gt_ids.empty()
+        const float recall = external ? calculate_id_recall(labels.data(), external_gt.ids.get(), nq, k, external_gt.width)
+            : gt_ids.empty()
             ? std::numeric_limits<float>::quiet_NaN()
             : calculate_recall(labels.data(), distances.data(), gt_ids.data(),
                                gt_distances.data(), nq, k, MetricType::METRIC_L2);
@@ -141,6 +180,8 @@ int main(int argc, char** argv) {
         const double projection_us = projection_seconds * 1e6 / nq;
         const double coarse_us = coarse_seconds * 1e6 / nq;
         const double verification_us = verification_seconds * 1e6 / nq;
+        const double overall_prune = stats.candidates ?
+            double(stats.triangle_pruned + stats.ppd_pruned)/stats.candidates : 0;
         std::cout << std::format(
             "PPD nprobe={} B={} triangle={} time={:.6f}s qps={:.3f} recall={:.6f} "
             "candidates={} tri_pruned={} ppd_pruned={} ppd_rate={:.4f} full={} dims={} "
@@ -154,7 +195,23 @@ int main(int argc, char** argv) {
                     << seconds << qps << recall << stats.candidates << stats.triangle_pruned
                     << stats.ppd_checked << stats.ppd_pruned << stats.full_distances
                     << stats.dimensions << equivalent << ppd_prune_rate << projection_us
-                    << coarse_us << verification_us << std::endl;
+                    << coarse_us << verification_us << overall_prune << nq << normalize
+                    << loop << warmups << "search_only_v2"
+#ifdef TRIBASE_ENABLE_STATS
+                    << 1
+#else
+                    << 0
+#endif
+                    << std::endl;
+        }
+        const auto dump_path = program.get<std::string>("--dump-search-results");
+        if (!dump_path.empty()) {
+            prepareDirectory(dump_path);
+            CsvWriter writer(dump_path, {"nprobe", "query_id", "neighbor", "id", "distance"},
+                             nprobe != nprobes.front(), false);
+            for (size_t qi = 0; qi < nq; ++qi)
+                for (size_t ki = 0; ki < k; ++ki)
+                    writer << nprobe << qi << ki << labels[qi*k+ki] << distances[qi*k+ki] << std::endl;
         }
     }
     return 0;

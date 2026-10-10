@@ -28,6 +28,11 @@ class IVFScanBase {
     // profiling counters so release builds can drive list-level pivot choice.
     size_t last_multipivot_checks = 0;
     size_t last_multipivot_pruned = 0;
+    int progressive_mode = 0;
+    double progressive_prior = 0.0;
+    size_t progressive_seed_dims = 0;
+    const PivotMetadata* progressive_geometry = nullptr;
+    size_t last_progressive_dims = 0;
 
     IVFScanBase(size_t d, size_t k)
         : d(d), k(k) {}
@@ -358,6 +363,183 @@ class IVFScan : public IVFScanBase {
                     }
 #endif
                 };
+
+                if (progressive_mode != 0 && projection_dynamic && !staged_projection_ok &&
+                    progressive_geometry != nullptr && progressive_geometry->has_U(active_pivot_count)) {
+                    // Experimental stage-major path. Freeze the original per-dimension
+                    // survival prior, or update it from actual conditional stage pruning.
+                    // Dense packed state survives compaction; each coordinate is added once.
+#ifdef TRIBASE_ENABLE_STATS
+                    auto tick = std::chrono::steady_clock::now();
+                    const double seed_exact_before = stats ? stats->candidate_exact_seconds : 0.0;
+#endif
+                    if (progressive_seed_dims == 0 && std::isfinite(simi[0])) {
+                        const size_t delta = std::min(active_pivot_count - 1, projection_block_size);
+                        const size_t ready = projection_ready_dims ? *projection_ready_dims : 0;
+                        const size_t new_dims = delta > ready ? delta - ready : 0;
+                        const double rho = std::clamp(-std::expm1(progressive_prior * delta), 0.0, 0.9999);
+                        const double population = scan_end - scan_begin;
+                        if (population * rho * d <= new_dims * static_cast<double>(d) +
+                            population * (delta + 9.0)) {
+#ifdef TRIBASE_ENABLE_STATS
+                            if (stats) stats->progressive_control_seconds +=
+                                std::chrono::duration<double>(std::chrono::steady_clock::now() - tick).count();
+#endif
+                            for (size_t ci = scan_begin; ci < scan_end; ++ci)
+                                if (!if_skip || !if_skip[ci]) evaluate_survivor(ci);
+                            return;
+                        }
+                    }
+                    std::vector<uint32_t> active;
+                    std::vector<float> scores, energies;
+                    std::vector<uint8_t> pruned;
+                    active.reserve(scan_end - scan_begin);
+                    for (size_t ci = scan_begin; ci < scan_end; ++ci) {
+                        if (if_skip && if_skip[ci]) continue;
+                        // Seed an initially infinite heap before predicting any gain.
+                        if (!std::isfinite(simi[0])) { evaluate_survivor(ci); continue; }
+                        active.push_back(static_cast<uint32_t>(ci));
+                    }
+                    scores.assign(active.size(), 0.0f);
+                    energies.resize(active.size());
+                    pruned.reserve(active.size());
+                    for (size_t pos = 0; pos < active.size(); ++pos)
+                        energies[pos] = pivot_metadata->candidate_centroid_squared[active[pos]];
+#ifdef TRIBASE_ENABLE_STATS
+                    if (stats) stats->candidate_active_copy_seconds +=
+                        std::max(0.0, std::chrono::duration<double>(std::chrono::steady_clock::now() - tick).count()
+                            - (stats->candidate_exact_seconds - seed_exact_before));
+#endif
+                    const size_t initial_count = active.size();
+                    const size_t max_dims = active_pivot_count - 1;
+                    double prior = progressive_prior;
+                    float hq2 = static_cast<float>(query_pivot_squared[0]);
+                    size_t rank = 0;
+                    while (!active.empty() && rank < max_dims) {
+#ifdef TRIBASE_ENABLE_STATS
+                        tick = std::chrono::steady_clock::now();
+#endif
+                        const size_t next = rank == 0 && progressive_seed_dims
+                            ? std::min(max_dims, progressive_seed_dims)
+                            : std::min(max_dims, rank + projection_block_size);
+                        const size_t delta_dims = next - rank;
+                        const size_t ready = projection_ready_dims ? *projection_ready_dims : rank;
+                        const size_t new_dims = next > ready ? next - ready : 0;
+                        const double rho = std::clamp(-std::expm1(prior * delta_dims), 0.0, 0.9999);
+                        // Same scalar-coordinate cost units as the original policy.
+                        // 6 = residual check, 3 = packed index/score/energy maintenance.
+                        const double predicted_saved = active.size() * rho;
+                        const double refinement_cost = new_dims * static_cast<double>(d) +
+                            active.size() * (delta_dims + 6.0 + 3.0);
+                        const bool seed = rank == 0 && progressive_seed_dims != 0;
+                        const bool proceed = seed || predicted_saved * d > refinement_cost;
+#ifdef TRIBASE_ENABLE_STATS
+                        if (stats) stats->progressive_control_seconds +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - tick).count();
+#endif
+                        if (!proceed) break;
+                        IF_STATS {
+                            stats->progressive_stages++;
+                            stats->progressive_candidate_updates += active.size() * delta_dims;
+                            stats->progressive_predicted_pruned += predicted_saved;
+                            stats->progressive_query_dims += new_dims;
+                        }
+#ifdef TRIBASE_ENABLE_STATS
+                        tick = std::chrono::steady_clock::now();
+#endif
+                        for (size_t dim = ready; dim < next; ++dim) {
+                            float z = 0.0f;
+                            const float* center = progressive_geometry->codes.data();
+#pragma omp simd reduction(+ : z)
+                            for (size_t axis = 0; axis < d; ++axis)
+                                z += (query[axis] - center[axis]) * progressive_geometry->U[dim * d + axis];
+                            query_signature_z[dim] = z;
+                        }
+                        if (projection_ready_dims) *projection_ready_dims = std::max(ready, next);
+                        for (size_t dim = rank; dim < next; ++dim)
+                            hq2 = std::max(0.0f, hq2 - query_signature_z[dim] * query_signature_z[dim]);
+                        const float hq = std::sqrt(hq2);
+#ifdef TRIBASE_ENABLE_STATS
+                        if (stats) stats->candidate_projection_seconds +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - tick).count();
+                        tick = std::chrono::steady_clock::now();
+#endif
+                        for (size_t dim = rank; dim < next; ++dim) {
+                            const float qz = query_signature_z[dim];
+                            size_t pos = 0;
+#if defined(__AVX2__)
+                            for (; pos + 8 <= active.size(); pos += 8) {
+                                const __m256i indexes = _mm256_loadu_si256(
+                                    reinterpret_cast<const __m256i*>(active.data() + pos));
+                                const __m256 xz = _mm256_i32gather_ps(signature_soa + dim * signature_count, indexes, 4);
+                                const __m256 delta = _mm256_sub_ps(_mm256_set1_ps(qz), xz);
+                                _mm256_storeu_ps(scores.data() + pos, _mm256_fmadd_ps(delta, delta,
+                                    _mm256_loadu_ps(scores.data() + pos)));
+                                _mm256_storeu_ps(energies.data() + pos, _mm256_max_ps(_mm256_setzero_ps(),
+                                    _mm256_sub_ps(_mm256_loadu_ps(energies.data() + pos), _mm256_mul_ps(xz, xz))));
+                            }
+#endif
+                            for (; pos < active.size(); ++pos) {
+                                const float xz = signature_soa[dim * signature_count + active[pos]];
+                                const float delta = qz - xz;
+                                scores[pos] += delta * delta;
+                                energies[pos] = std::max(0.0f, energies[pos] - xz * xz);
+                            }
+                        }
+                        // Preserve projected accumulators; use energy as residual state.
+                        pruned.resize(active.size());
+                        const float radius = simi[0];
+#pragma omp simd
+                        for (size_t pos = 0; pos < active.size(); ++pos) {
+                            const float gap = hq - std::sqrt(energies[pos]);
+                            const float lb = scores[pos] + gap * gap;
+                            // Roundoff guard: conservative rejection at threshold equality.
+                            const float tolerance = 8 * std::numeric_limits<float>::epsilon() *
+                                (static_cast<float>(query_pivot_squared[0]) +
+                                 pivot_metadata->candidate_centroid_squared[active[pos]] + radius);
+                            pruned[pos] = lb > radius + tolerance;
+                        }
+#ifdef TRIBASE_ENABLE_STATS
+                        if (stats) stats->candidate_lb_seconds +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - tick).count();
+                        tick = std::chrono::steady_clock::now();
+#endif
+                        const size_t before = active.size();
+                        size_t remaining = 0;
+                        for (size_t pos = 0; pos < before; ++pos) {
+                            if (pruned[pos]) continue;
+                            active[remaining] = active[pos];
+                            scores[remaining] = scores[pos];
+                            energies[remaining] = energies[pos];
+                            ++remaining;
+                        }
+                        active.resize(remaining); scores.resize(remaining); energies.resize(remaining);
+                        last_multipivot_pruned += before - remaining;
+                        IF_STATS { stats->multipivot_pruned += before - remaining; }
+                        if (progressive_mode == 2) {
+                            // Dimension-weighted smoothing of log survival per direction.
+                            // The first stage combines equally with one block of prior;
+                            // later observations accumulate more evidence.
+                            const double observed = std::log(std::clamp(
+                                static_cast<double>(remaining) / before, 1e-4, 1.0)) / delta_dims;
+                            prior = (prior * (rank + projection_block_size) + observed * delta_dims) /
+                                (rank + projection_block_size + delta_dims);
+                        }
+                        rank = next;
+#ifdef TRIBASE_ENABLE_STATS
+                        if (stats) stats->candidate_active_copy_seconds +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - tick).count();
+#endif
+                    }
+                    last_progressive_dims = rank;
+                    // Checks count unique candidates, not repeated stage visits.
+                    if (rank) {
+                        last_multipivot_checks = initial_count;
+                        IF_STATS { stats->multipivot_checks += initial_count; }
+                    }
+                    for (uint32_t ci : active) evaluate_survivor(ci);
+                    return;
+                }
 
                 // Dynamic mode chooses one prefix per list. Materialize that query
                 // prefix once, evaluate one SIMD lower bound per candidate, then send

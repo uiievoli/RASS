@@ -1345,6 +1345,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
 #endif
     std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe, edge_device_enabled);
     std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k, edge_device_enabled);
+    scaner->progressive_mode = projection_progressive;
 
     std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe);
     std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe);
@@ -1517,7 +1518,10 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                 //   projection + SIMD LB/residual + predicted surviving exact L2.
                 // The previous visited list supplies the observed pruning prior.
                 size_t dynamic_pivot_budget = multipivot_active_count;
+                bool dynamic_exploration_forced = false;
                 if (projection_dynamic && projection_block_size != 0 &&
+                    (projection_progressive == 0 || projection_progressive_keep_exploration ||
+                     !previous_dynamic_observation_valid) &&
                     multipivot_mode == MultiPivotMode::PROJECTION) {
                     const size_t max_pivots = multipivot_scope == MultiPivotScope::GLOBAL
                         ? global_active_pivots
@@ -1534,6 +1538,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                         // of the probe order with full P so hard near lists do not
                         // suppress MP before the easier far-list regime is seen.
                         dynamic_pivot_budget = max_pivots;
+                        dynamic_exploration_forced = true;
                     } else if (multipivot_scope == MultiPivotScope::GLOBAL &&
                                max_pivots > 1) {
                         // A small-prefix observation cannot predict whether later
@@ -1601,9 +1606,11 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                         if (exploration_incomplete &&
                             exploration_dims > global_projection_ready_dims) {
                             dynamic_pivot_budget = exploration_dims + 1;
+                            dynamic_exploration_forced = true;
                         } else if (!previous_dynamic_observation_valid) {
                             dynamic_pivot_budget = std::min(
                                 max_pivots, projection_block_size + 1);
+                            dynamic_exploration_forced = true;
                         } else {
                             // Fall through to the cost minimization below after
                             // the geometric exploration reaches its current cap.
@@ -1616,8 +1623,10 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                         dynamic_pivot_budget = multipivot_scope == MultiPivotScope::GLOBAL
                             ? std::min(max_pivots, projection_block_size + 1)
                             : max_pivots;
+                        dynamic_exploration_forced = true;
                     }
-                    if (dynamic_pivot_budget > max_pivots) {
+                    if (dynamic_pivot_budget > max_pivots &&
+                        (projection_progressive == 0 || !previous_dynamic_observation_valid)) {
                         const double D = static_cast<double>(d);
                         const double R = static_cast<double>(survivors);
                         // One residual sqrt/check costs about six coordinate updates
@@ -1674,6 +1683,15 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                     }
                 }
 
+                scaner->progressive_prior = best_log_survival_per_dimension;
+                const bool progressive_calibration = projection_progressive != 0 &&
+                    (!previous_dynamic_observation_valid ||
+                     (projection_progressive_keep_exploration && dynamic_exploration_forced));
+                scaner->progressive_mode = progressive_calibration ? 0 : projection_progressive;
+                scaner->progressive_seed_dims = 0;
+                scaner->last_progressive_dims = 0;
+                if (projection_progressive && !progressive_calibration)
+                    dynamic_pivot_budget = multipivot_active_count;
                 std::array<double, MULTIPIVOT_MAX_PIVOTS> per_list_query_pivot_squared{};
                 std::array<float, MULTIPIVOT_MAX_PIVOTS> per_list_query_signature_z{};
                 size_t per_list_projection_ready_dims = 0;
@@ -1693,7 +1711,8 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                 const bool use_dynamic_prefix_for_list =
                     projection_dynamic && projection_block_size != 0 &&
                     dynamic_pivot_budget != 0 &&
-                    dynamic_pivot_budget < configured_full_pivots;
+                    ((projection_progressive != 0 && !progressive_calibration) ||
+                     dynamic_pivot_budget < configured_full_pivots);
                 if (multipivot_mode != MultiPivotMode::NONE) {
                     pivot_metadata = &list.pivots;
                     if (multipivot_scope == MultiPivotScope::GLOBAL) {
@@ -1705,6 +1724,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                         // newly requested global prefix here so IVFScan never tries
                         // to read U from a per-list signature container.
                         if (use_dynamic_prefix_for_list &&
+                            (projection_progressive == 0 || progressive_calibration) &&
                             active_pivots > 1 && global_pivots.has_U(active_pivots)) {
                             const size_t requested_dims = active_pivots - 1;
 #ifdef TRIBASE_ENABLE_STATS
@@ -1811,7 +1831,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                     }
                 }
                 IF_STATS {
-                    stats->active_pivot_histogram[
+                    if (!projection_progressive) stats->active_pivot_histogram[
                         std::min(active_pivots, stats->active_pivot_histogram.size() - 1)]++;
                 }
                 // A zero list-level budget is an intentional baseline decision:
@@ -1888,6 +1908,8 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
 #ifdef TRIBASE_ENABLE_STATS
                 const auto candidate_decision_start = std::chrono::steady_clock::now();
 #endif
+                scaner->progressive_geometry = multipivot_scope == MultiPivotScope::GLOBAL
+                    ? &global_pivots : &list.pivots;
                 scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(), list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
                                    list.get_sqrt_candidate2centroid(), sub_k, list.get_sub_nearest_IP_id(),
                                    list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(), list.get_sub_farest_IP_dis(),
@@ -1902,6 +1924,11 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                                    query_signature_ready,
                                    if_skip.get(), simi, idxi,
                                    stats, centroid_codes.get() + listids[j] * d, ratio, ratio);
+                if (projection_progressive) {
+                    if (!progressive_calibration)
+                        active_pivots = scaner->last_progressive_dims ? scaner->last_progressive_dims + 1 : 0;
+                    IF_STATS { stats->active_pivot_histogram[active_pivots]++; }
+                }
                 if (projection_dynamic && scaner->last_multipivot_checks != 0) {
                     const double observed_prune_rate =
                         static_cast<double>(scaner->last_multipivot_pruned) /
@@ -2609,6 +2636,15 @@ void Index::probe_progressive_oracle(
     if (!out) throw std::runtime_error("Cannot open progressive oracle CSV: " + csv_path);
     out << "q_id,list_rank,list_id,list_size,tau2,scope,m,k,center_survivors,"
            "prefix_pruned,ub_exact,undecided,candidate_steps,residual_checks,exact_distances\n";
+    std::ofstream feature_out;
+    if (config.predictor_features) {
+        feature_out.open(csv_path + ".predictor.csv", std::ios::trunc);
+        if (!feature_out) throw std::runtime_error("Cannot open oracle predictor feature output");
+        feature_out << "q_id,list_rank,list_id,list_size,tau2,scope,d,m,r,next_r,"
+                       "survivors,true_next_pruned,eta_x_mean,eta_q,margin_tau_mean,"
+                       "margin_u_bin0,margin_u_bin1,margin_u_bin2,margin_u_bin3,"
+                       "margin_u_bin4,margin_u_bin5,margin_u_bin6,oracle_final_tau\n";
+    }
     std::mutex output_mu;
 
 #pragma omp parallel
@@ -2680,7 +2716,9 @@ void Index::probe_progressive_oracle(
                 if (lid < 0 || static_cast<size_t>(lid) >= nlist) continue;
                 const IVF& list = lists[lid];
                 const PivotMetadata& meta = list.pivots;
-                if (list.list_size == 0 || meta.count != P || !meta.has_U(P) ||
+                const bool geometry_ready = multipivot_scope == MultiPivotScope::GLOBAL
+                    ? global_pivots.has_U(P) : meta.has_U(P);
+                if (list.list_size == 0 || meta.count != P || !geometry_ready ||
                     meta.signature_precision != SignaturePrecision::FLOAT32 ||
                     meta.signature_data.size() != P * list.list_size ||
                     meta.candidate_centroid_squared.size() != list.list_size ||
@@ -2713,6 +2751,80 @@ void Index::probe_progressive_oracle(
                 uint64_t center_survivors = 0;
                 const float sqrt_q_ivf =
                     std::sqrt(std::max(0.0f, centroid_distances[rank]));
+
+                if (config.predictor_features) {
+                    // Diagnostic pass only: all signatures are available offline.
+                    // Features at r never use next-prefix coordinates or labels.
+                    // C_r contains every candidate with LB_r <= the fixed oracle
+                    // threshold; UB acceptance is not removed from this population.
+                    const size_t stages = checkpoints.size();
+                    std::vector<uint64_t> counts(stages, 0), gains(stages, 0);
+                    std::vector<double> eta_sum(stages, 0.0), margin_sum(stages, 0.0);
+                    std::vector<std::array<uint64_t, 7>> hist(stages);
+                    std::vector<double> query_residual(m + 1, 0.0);
+                    query_residual[0] = std::max(0.0, qp[0]);
+                    for (size_t axis = 0; axis < m; ++axis) {
+                        query_residual[axis + 1] = std::max(0.0,
+                            query_residual[axis] - static_cast<double>(zq[axis]) * zq[axis]);
+                    }
+                    constexpr double edges[] = {0.05, 0.1, 0.25, 0.5, 0.75, 1.0};
+                    for (size_t ci = 0; ci < list.list_size; ++ci) {
+                        const double center_gap = sqrt_q_ivf - list.get_sqrt_candidate2centroid(ci);
+                        if (center_gap * center_gap > tau2) continue;
+                        const double rx2 = std::max(0.0, static_cast<double>(meta.candidate_centroid_squared[ci]));
+                        double hx2 = rx2, projected = 0.0;
+                        size_t evaluated = 0;
+                        bool previously_alive = false;
+                        for (size_t stage = 0; stage < stages; ++stage) {
+                            const size_t r = checkpoints[stage];
+                            while (evaluated < r) {
+                                const double xz = meta.signature_data[evaluated * list.list_size + ci];
+                                const double delta = static_cast<double>(zq[evaluated]) - xz;
+                                projected += delta * delta;
+                                hx2 = std::max(0.0, hx2 - xz * xz);
+                                ++evaluated;
+                            }
+                            const double hq = std::sqrt(query_residual[r]);
+                            const double hx = std::sqrt(hx2);
+                            const double gap = hq - hx;
+                            const double lb2 = projected + gap * gap;
+                            const bool alive = lb2 <= static_cast<double>(tau2);
+                            if (stage != 0 && previously_alive && !alive) ++gains[stage - 1];
+                            if (alive) {
+                                ++counts[stage];
+                                eta_sum[stage] += rx2 > 0.0 ? hx2 / rx2 : 0.0;
+                                const double margin = std::max(0.0, static_cast<double>(tau2) - lb2);
+                                margin_sum[stage] += margin / std::max(1e-30, static_cast<double>(tau2));
+                                // UB^2-LB^2 = 4*hq*hx. Relative margin >=1 cannot
+                                // be pruned by any remaining orthogonal prefix.
+                                const double uncertainty = 4.0 * hq * hx;
+                                const double relative = uncertainty > 0.0 ? margin / uncertainty
+                                    : std::numeric_limits<double>::infinity();
+                                size_t bin = 0;
+                                while (bin < 6 && relative >= edges[bin]) ++bin;
+                                ++hist[stage][bin];
+                            }
+                            previously_alive = alive;
+                        }
+                    }
+                    std::string feature_rows;
+                    for (size_t stage = 0; stage + 1 < stages; ++stage) {
+                        const double inv = counts[stage] ? 1.0 / counts[stage] : 0.0;
+                        const size_t r = checkpoints[stage];
+                        const double eta_q = qp[0] > 0.0 ? query_residual[r] / qp[0] : 0.0;
+                        feature_rows += std::format("{},{},{},{},{:.9g},{},{},{},{},{},{},{},{:.9g},{:.9g},{:.9g}",
+                            qi, rank, static_cast<long long>(lid), list.list_size, tau2,
+                            multipivot_scope == MultiPivotScope::GLOBAL ? "global" : "per_list",
+                            d, m, r, checkpoints[stage + 1], counts[stage], gains[stage],
+                            eta_sum[stage] * inv, eta_q, margin_sum[stage] * inv);
+                        for (size_t bin = 0; bin < 7; ++bin) {
+                            feature_rows += std::format(",{:.9g}", static_cast<double>(hist[stage][bin]) * inv);
+                        }
+                        feature_rows += ",1\n";
+                    }
+                    std::lock_guard<std::mutex> lock(output_mu);
+                    feature_out << feature_rows;
+                }
 
                 for (size_t ci = 0; ci < list.list_size; ++ci) {
                     const float rx_ivf = list.get_sqrt_candidate2centroid(ci);

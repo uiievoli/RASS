@@ -119,7 +119,17 @@ class Stats {
     double candidate_lb_seconds;
     double candidate_exact_seconds;
     double candidate_active_copy_seconds;
+    size_t progressive_stages = 0;
+    size_t progressive_candidate_updates = 0;
+    size_t progressive_query_dims = 0;
+    double progressive_predicted_pruned = 0;
+    double progressive_control_seconds = 0;
     std::array<size_t, 513> active_pivot_histogram;
+    size_t selected_pivot_sum() const {
+        size_t sum = 0;
+        for (size_t p = 0; p < active_pivot_histogram.size(); ++p) sum += p * active_pivot_histogram[p];
+        return sum;
+    }
 
     size_t nlist;
     size_t nprobe;
@@ -199,6 +209,8 @@ class Stats {
         candidate_lb_seconds = 0;
         candidate_exact_seconds = 0;
         candidate_active_copy_seconds = 0;
+        progressive_stages = progressive_candidate_updates = progressive_query_dims = 0;
+        progressive_predicted_pruned = progressive_control_seconds = 0;
         active_pivot_histogram.fill(0);
         nlist = 0;
         nprobe = 0;
@@ -303,7 +315,8 @@ class Stats {
                           "time_speedup", "pruning_speedup", "query_time", "qps",
                           "recall", "r2", "benchmark_protocol", "measurement_loops",
                           "warmup_loops", "warmup_seconds", "evaluation_seconds", "n_query",
-                          "benchmark_stats_enabled"},
+                          "benchmark_stats_enabled", "progressive_stages", "progressive_candidate_updates",
+                          "progressive_query_dims", "progressive_predicted_pruned", "progressive_control_seconds", "total_candidates", "active_pivots_sum"},
                          append, false);
         summary();
         writer << dataset << nlist << nprobe << static_cast<int>(opt_level)
@@ -338,6 +351,10 @@ class Stats {
 #else
                << 0
 #endif
+               << progressive_stages << progressive_candidate_updates << progressive_query_dims
+               << progressive_predicted_pruned << progressive_control_seconds
+               << total_count
+               << selected_pivot_sum()
                << std::endl;
     }
 };
@@ -370,6 +387,11 @@ inline Stats mergeStats(std::vector<Stats>& stats) {
         merged.candidate_lb_seconds += s.candidate_lb_seconds;
         merged.candidate_exact_seconds += s.candidate_exact_seconds;
         merged.candidate_active_copy_seconds += s.candidate_active_copy_seconds;
+        merged.progressive_stages += s.progressive_stages;
+        merged.progressive_candidate_updates += s.progressive_candidate_updates;
+        merged.progressive_query_dims += s.progressive_query_dims;
+        merged.progressive_predicted_pruned += s.progressive_predicted_pruned;
+        merged.progressive_control_seconds += s.progressive_control_seconds;
         for (size_t p = 0; p < merged.active_pivot_histogram.size(); ++p) {
             merged.active_pivot_histogram[p] += s.active_pivot_histogram[p];
         }

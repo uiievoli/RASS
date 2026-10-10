@@ -1,0 +1,333 @@
+{
+  "fasion_mnist_784": {
+    "nlist": 256,
+    "scope": "per_list",
+    "pmax": 96,
+    "best_p": {
+      "global": 64,
+      "per_list": 48
+    },
+    "fixed_nprobes": [
+      7
+    ],
+    "nprobes": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      10,
+      15,
+      20
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 10,
+    "seed": 0,
+    "normalize": false,
+    "input_format": "fvecs",
+    "groundtruth": "",
+    "ppd": true,
+    "best_status": "historical_tested_best",
+    "input_labels": "not_applicable"
+  },
+  "msong_holdout": {
+    "nlist": 1000,
+    "scope": "per_list",
+    "pmax": 96,
+    "best_p": {
+      "global": 64,
+      "per_list": 34
+    },
+    "fixed_nprobes": [
+      16
+    ],
+    "nprobes": [
+      5,
+      6,
+      8,
+      10,
+      12,
+      16,
+      20,
+      30,
+      50
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 5,
+    "seed": 0,
+    "normalize": false,
+    "input_format": "fvecs",
+    "groundtruth": "",
+    "ppd": true,
+    "best_status": "historical_tested_best",
+    "input_labels": "not_applicable"
+  },
+  "sift1m": {
+    "nlist": 1000,
+    "scope": "per_list",
+    "pmax": 40,
+    "best_p": {
+      "global": 36,
+      "per_list": 23
+    },
+    "fixed_nprobes": [
+      34
+    ],
+    "nprobes": [
+      9,
+      10,
+      12,
+      16,
+      20,
+      24,
+      30,
+      34,
+      50,
+      70,
+      100
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 3,
+    "seed": 0,
+    "normalize": false,
+    "input_format": "fvecs",
+    "groundtruth": "",
+    "ppd": true,
+    "best_status": "historical_tested_best",
+    "input_labels": "not_applicable"
+  },
+  "glove25": {
+    "nlist": 1024,
+    "scope": "global",
+    "pmax": 26,
+    "best_p": {
+      "global": 14,
+      "per_list": 8
+    },
+    "fixed_nprobes": [
+      50
+    ],
+    "nprobes": [
+      10,
+      12,
+      16,
+      20,
+      30,
+      40,
+      50,
+      70,
+      100
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 10,
+    "seed": 0,
+    "normalize": false,
+    "input_format": "fvecs",
+    "groundtruth": "",
+    "ppd": true,
+    "best_status": "historical_tested_best",
+    "input_labels": "not_applicable"
+  },
+  "HandOutlines": {
+    "nlist": 32,
+    "scope": "global",
+    "pmax": 64,
+    "best_p": {
+      "global": 7,
+      "per_list": 4
+    },
+    "fixed_nprobes": [
+      4
+    ],
+    "nprobes": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      7,
+      10
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 200,
+    "seed": 0,
+    "normalize": false,
+    "input_format": "fvecs",
+    "groundtruth": "",
+    "ppd": true,
+    "best_status": "historical_tested_best",
+    "input_labels": "preserve_existing_input_and_groundtruth"
+  },
+  "StarLightCurves": {
+    "nlist": 128,
+    "scope": "global",
+    "pmax": 104,
+    "best_p": {
+      "global": 18,
+      "per_list": 16
+    },
+    "fixed_nprobes": [
+      4
+    ],
+    "nprobes": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      7,
+      10
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 50,
+    "seed": 0,
+    "normalize": false,
+    "input_format": "fvecs",
+    "groundtruth": "",
+    "ppd": true,
+    "best_status": "historical_tested_best",
+    "input_labels": "preserve_existing_input_and_groundtruth"
+  },
+  "dbpedia1536m_holdout": {
+    "nlist": 1000,
+    "scope": "per_list",
+    "pmax": 256,
+    "best_p": {
+      "global": 128,
+      "per_list": 128
+    },
+    "fixed_nprobes": [
+      160
+    ],
+    "nprobes": [
+      16,
+      20,
+      24,
+      30,
+      50,
+      75,
+      100,
+      150,
+      160,
+      200
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 1,
+    "seed": 0,
+    "normalize": false,
+    "input_format": "fvecs",
+    "groundtruth": "",
+    "ppd": true,
+    "best_status": "historical_tested_best",
+    "input_labels": "not_applicable"
+  },
+  "sift1b": {
+    "nlist": 32768,
+    "scope": "global",
+    "pmax": 16,
+    "best_p": {
+      "global": 16,
+      "per_list": 16
+    },
+    "fixed_nprobes": [
+      128
+    ],
+    "nprobes": [
+      32,
+      48,
+      64,
+      96,
+      128,
+      192,
+      256,
+      384,
+      512,
+      768,
+      1024
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 1,
+    "seed": 0,
+    "normalize": false,
+    "input_format": "bvecs",
+    "groundtruth": "raw/gnd/idx_1000M.ivecs",
+    "ppd": false,
+    "best_status": "reference_not_tuned",
+    "input_labels": "not_applicable"
+  },
+  "glove-200-angular": {
+    "nlist": 1024,
+    "scope": "per_list",
+    "pmax": 64,
+    "best_p": {
+      "global": 21,
+      "per_list": 21
+    },
+    "fixed_nprobes": [
+      512
+    ],
+    "nprobes": [
+      80,
+      96,
+      128,
+      192,
+      256,
+      384,
+      512
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 3,
+    "seed": 0,
+    "normalize": true,
+    "input_format": "fvecs",
+    "groundtruth": "result/official_neighbors.i32bin",
+    "ppd": true,
+    "best_status": "reference_not_tuned",
+    "input_labels": "not_applicable"
+  },
+  "landmark-dino-768-cosine": {
+    "nlist": 1024,
+    "scope": "per_list",
+    "pmax": 160,
+    "best_p": {
+      "global": 78,
+      "per_list": 78
+    },
+    "fixed_nprobes": [
+      64
+    ],
+    "nprobes": [
+      6,
+      7,
+      8,
+      12,
+      16,
+      24,
+      32,
+      64,
+      128,
+      256,
+      512
+    ],
+    "k": 1,
+    "nq": 0,
+    "loops": 3,
+    "seed": 0,
+    "normalize": true,
+    "input_format": "fvecs",
+    "groundtruth": "result/official_neighbors.i32bin",
+    "ppd": true,
+    "best_status": "reference_not_tuned",
+    "input_labels": "not_applicable"
+  }
+}

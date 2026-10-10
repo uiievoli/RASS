@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "ExternalGroundTruth.h"
 #include "tribase.h"
 #include "utils.h"
 
@@ -26,71 +27,6 @@ using namespace tribase;
 bool str_lower_equal(const std::string& a, const std::string& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
                       [](char a, char b) { return std::tolower(a) == std::tolower(b); });
-}
-
-struct ExternalGroundTruth {
-    std::unique_ptr<idx_t[]> ids;
-    size_t width = 0;
-};
-
-ExternalGroundTruth load_external_groundtruth(const std::string& path, size_t requested_nq) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) throw std::runtime_error("Cannot open external ground truth: " + path);
-    uint32_t stored_nq = 0, width = 0;
-    const bool ivecs = path.ends_with(".ivecs");
-    const bool i32bin = path.ends_with(".i32bin");
-    if (!ivecs && !i32bin) {
-        throw std::invalid_argument("External ground truth must be .ivecs or .i32bin: " + path);
-    }
-    if (i32bin) {
-        input.read(reinterpret_cast<char*>(&stored_nq), sizeof(stored_nq));
-        input.read(reinterpret_cast<char*>(&width), sizeof(width));
-    } else {
-        input.read(reinterpret_cast<char*>(&width), sizeof(width));
-        if (!input || width == 0) throw std::runtime_error("Invalid ivecs ground truth: " + path);
-        const uint64_t bytes = std::filesystem::file_size(path);
-        const uint64_t stride = sizeof(uint32_t) * (static_cast<uint64_t>(width) + 1);
-        if (bytes % stride != 0) throw std::runtime_error("Truncated ivecs ground truth: " + path);
-        stored_nq = static_cast<uint32_t>(bytes / stride);
-        input.seekg(0, std::ios::beg);
-    }
-    if (!input || width == 0 || requested_nq > stored_nq) {
-        throw std::runtime_error("External ground truth shape is smaller than requested queries: " + path);
-    }
-    auto ids = std::make_unique<idx_t[]>(requested_nq * static_cast<size_t>(width));
-    std::vector<int32_t> row(width);
-    for (size_t query = 0; query < requested_nq; ++query) {
-        if (ivecs) {
-            uint32_t row_width = 0;
-            input.read(reinterpret_cast<char*>(&row_width), sizeof(row_width));
-            if (row_width != width) throw std::runtime_error("Mixed-width ivecs ground truth: " + path);
-        }
-        input.read(reinterpret_cast<char*>(row.data()),
-                   static_cast<std::streamsize>(width * sizeof(int32_t)));
-        if (!input) throw std::runtime_error("Truncated external ground truth: " + path);
-        for (size_t neighbor = 0; neighbor < width; ++neighbor) {
-            ids[query * width + neighbor] = static_cast<idx_t>(row[neighbor]);
-        }
-    }
-    return {std::move(ids), static_cast<size_t>(width)};
-}
-
-float calculate_id_recall(const idx_t* labels, const idx_t* ground_truth,
-                          size_t nq, size_t k, size_t ground_truth_width) {
-    if (k > ground_truth_width) {
-        throw std::invalid_argument("Search k exceeds external ground-truth width");
-    }
-    size_t hits = 0;
-#pragma omp parallel for reduction(+ : hits)
-    for (size_t query = 0; query < nq; ++query) {
-        std::unordered_set<idx_t> expected(
-            ground_truth + query * ground_truth_width,
-            ground_truth + query * ground_truth_width + k);
-        for (size_t neighbor = 0; neighbor < k; ++neighbor) {
-            hits += expected.contains(labels[query * k + neighbor]);
-        }
-    }
-    return static_cast<float>(hits) / static_cast<float>(nq * k);
 }
 
 bool is_byte_vector_file(const std::string& path) {
@@ -261,7 +197,16 @@ int main(int argc, char* argv[]) {
     program.add_argument("--projection_dynamic")
         .default_value(false)
         .implicit_value(true)
-        .help("dynamic stage-major PCA filtering with active-candidate compaction");
+        .help("original dynamic list-level PCA prefix selection");
+    program.add_argument("--projection_progressive")
+        .default_value(std::string("none"))
+        .help("experimental original predictor: none, frozen, or updated");
+    program.add_argument("--projection_progressive_keep_exploration")
+        .default_value(false).implicit_value(true)
+        .help("preserve original cross-list exploration before progressive cost decisions");
+    program.add_argument("--dump_search_results")
+        .default_value(std::string(""))
+        .help("export final query IDs/distances to CSV after the timed search");
     program.add_argument("--microblocks")
         .default_value(false)
         .implicit_value(true)
@@ -377,6 +322,9 @@ int main(int argc, char* argv[]) {
         .nargs(0, 32)
         .help("projected-dimension checkpoints; empty uses 0,1,2,4,...,m")
         .scan<'u', size_t>();
+    program.add_argument("--oracle_predictor_features")
+        .default_value(false).implicit_value(true)
+        .help("offline oracle: export residual/margin features and next-stage pruning labels");
 
     try {
         program.parse_args(argc, argv);
@@ -519,6 +467,14 @@ int main(int argc, char* argv[]) {
     const size_t projection_prefix_length = program.get<size_t>("projection_prefix_length");
     const size_t projection_block_size = program.get<size_t>("projection_block_size");
     const bool projection_dynamic = program.get<bool>("projection_dynamic");
+    const std::string progressive_name = program.get<std::string>("projection_progressive");
+    if (progressive_name != "none" && progressive_name != "frozen" && progressive_name != "updated")
+        throw std::invalid_argument("--projection_progressive must be none, frozen, or updated");
+    const int progressive_mode = progressive_name == "frozen" ? 1 : progressive_name == "updated" ? 2 : 0;
+    if (progressive_mode && (program.get<std::string>("metric") != "l2" ||
+        multipivot_method != "pca" || signature_precision != SignaturePrecision::FLOAT32 ||
+        projection_block_size == 0 || projection_prefix_length != 0 || program.get<bool>("microblocks")))
+        throw std::invalid_argument("progressive requires L2 float32 PCA, block_size>0, prefix_length=0, no microblocks");
     if (projection_prefix_length != 0 && signature_precision != SignaturePrecision::FLOAT32) {
         throw std::invalid_argument(
             "--projection_prefix_length currently requires --signature_precision float32");
@@ -944,7 +900,10 @@ int main(int argc, char* argv[]) {
         index.apply_signature_precision();
         index.set_projection_prefix_length(projection_prefix_length);
         index.projection_block_size = projection_block_size;
-        index.projection_dynamic = projection_dynamic;
+        index.projection_dynamic = projection_dynamic || progressive_mode != 0;
+        index.projection_progressive = progressive_mode;
+        index.projection_progressive_keep_exploration =
+            program.get<bool>("projection_progressive_keep_exploration");
         if (microblocks_enabled) {
             bool need_rebuild = false;
             for (size_t list_id = 0; list_id < index.nlist; ++list_id) {
@@ -1235,6 +1194,7 @@ int main(int argc, char* argv[]) {
         Index::ProgressiveOracleConfig oracle_cfg;
         oracle_cfg.max_probes = nprobes.empty() ? 0 : nprobes.front();
         oracle_cfg.checkpoints = program.get<std::vector<size_t>>("oracle_checkpoints");
+        oracle_cfg.predictor_features = program.get<bool>("oracle_predictor_features");
         index.probe_progressive_oracle(nq, query.get(), k, progressive_oracle_path,
                                        oracle_cfg);
         if (program.get<bool>("progressive_oracle_only")) return 0;
@@ -1259,6 +1219,7 @@ int main(int argc, char* argv[]) {
     }
 
     bool list_stats_header_written = false;
+    bool search_results_header_written = false;
     std::vector<std::pair<MultiPivotMode, size_t>> multipivot_runs;
     for (MultiPivotMode mode : multipivot_modes) {
         if (mode == MultiPivotMode::NONE) {
@@ -1340,6 +1301,17 @@ int main(int argc, char* argv[]) {
                 stats.r2 = r2;
                 stats.print();
                 stats.toCsv(log_path, true, dataset);
+                const std::string search_results_path = program.get<std::string>("dump_search_results");
+                if (!search_results_path.empty()) {
+                    prepareDirectory(search_results_path);
+                    CsvWriter writer(search_results_path,
+                        {"nprobe", "query_id", "neighbor", "id", "distance"},
+                        search_results_header_written, false);
+                    for (size_t qi = 0; qi < nq; ++qi)
+                        for (size_t ki = 0; ki < k; ++ki)
+                            writer << nprobe << qi << ki << labels[qi*k+ki] << distances[qi*k+ki] << std::endl;
+                    search_results_header_written = true;
+                }
                 if (dump_list_stats && !stats.list_visits.empty()) {
                     prepareDirectory(dump_list_stats_path);
                     listVisitsToCsv(dump_list_stats_path, stats.list_visits, list_stats_header_written, dataset,

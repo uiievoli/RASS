@@ -119,6 +119,7 @@ class Index {
     struct ProgressiveOracleConfig {
         size_t max_probes = 0;  // 0 => current nprobe
         std::vector<size_t> checkpoints;  // projected dimensions; empty => powers of two + max
+        bool predictor_features = false; // offline paper Eq.21--25 feature/label export
     };
     void probe_progressive_oracle(size_t n,
                                   const float* queries,
@@ -159,6 +160,10 @@ class Index {
     // Optional fixed-size progressive PCA blocks; 0 keeps the legacy full scan.
     size_t projection_block_size = 0;
     bool projection_dynamic = false;
+    // Experimental stage-major reuse of the original survival-rate predictor.
+    // 0=original list budget, 1=frozen list prior, 2=update from current stages.
+    int projection_progressive = 0;
+    bool projection_progressive_keep_exploration = false;
     uint64_t multipivot_seed = 0;
     size_t irls_max_iter = 5;
     float irls_residual_floor = 1e-6f;

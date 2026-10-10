@@ -39,6 +39,8 @@ benchmarks.zip
 build-perf
 build-release
 build-stats
+/build-progressive-perf/
+/build-progressive-stats/
 reports
 /Tribase-*.tar.gz
 /Tribase-*.tar.gz.sha256
