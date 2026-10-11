@@ -36,7 +36,7 @@ while (($#)); do
       cat <<'HELP'
 Usage: scripts/build_and_run_all_10_datasets.sh --data-root DIR --log-dir DIR [options]
 
-Runs all ten datasets by default. Existing binaries are incrementally rebuilt;
+Runs configured datasets excluding SIFT1B by default; use --datasets sift1b for a separate run. Existing binaries are incrementally rebuilt;
 indexes and verified results are reused. The three recall > 0.9 plots are saved
 after an all-phase run. Inputs must already exist; no dataset download occurs.
 
@@ -90,7 +90,7 @@ fi
 if ((!SKIP_PLOTS)) && [[ "$PHASE" == all ]]; then
   plot=(python3 "$ROOT/scripts/plot_all10_recall_gt09.py" --log-root "$LOG_DIR")
   if [[ -z "$ONLY_DATASETS" && -n "$CONFIG_FILE" ]]; then
-    ONLY_DATASETS="$(python3 -c 'import json,sys; print(",".join(json.load(open(sys.argv[1]))))' "$CONFIG_FILE")"
+    ONLY_DATASETS="$(python3 -c 'import json,sys; print(",".join(ds for ds in json.load(open(sys.argv[1])) if ds != "sift1b"))' "$CONFIG_FILE")"
   fi
   [[ -z "$ONLY_DATASETS" ]] || plot+=(--datasets "${ONLY_DATASETS// /,}")
   run env MPLCONFIGDIR="$LOG_DIR/.matplotlib" XDG_CACHE_HOME="$LOG_DIR/.cache" MPLBACKEND=Agg "${plot[@]}"

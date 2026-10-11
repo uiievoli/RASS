@@ -60,7 +60,7 @@ Selection:
   --warmup-loops N      Untimed passes for each nprobe/method; default 1.
   --pivot-seed N        PCA seed; default 0 (reuses the SIFT1B PCA16 index).
   --omp-wait-policy P   PASSIVE (default) or ACTIVE, recorded with each run.
-  --datasets LIST       Subset of the ten dataset names.
+  --datasets LIST       Explicit subset; default excludes SIFT1B.
   --config FILE         Validated JSON profiles for a separate supplement.
   --sift1b-dir DIR      Override DATA_ROOT/sift1b/raw; link inputs if origin is absent.
   --spacev-dir DIR      Override DATA_ROOT/spacev1b/raw; link inputs if origin is absent.
@@ -242,7 +242,7 @@ fi
 
 selected() {
   local needle="$1"
-  [[ -z "${ONLY_DATASETS}" ]] && return 0
+  [[ -z "${ONLY_DATASETS}" ]] && { [[ "${needle}" != sift1b ]]; return; }
   local normalized=" ${ONLY_DATASETS//,/ } "
   [[ "${normalized}" == *" ${needle} "* ]]
 }

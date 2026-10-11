@@ -18,8 +18,8 @@ def inspect(path, dimension):
         train, test, neighbors = (source[k] for k in ('train', 'test', 'neighbors'))
         distance = source.attrs.get('distance', '')
         if isinstance(distance, bytes): distance = distance.decode()
-        if str(distance).lower() not in ('angular', 'cosine'):
-            raise ValueError(f'Expected angular/cosine, found {distance!r}')
+        if str(distance).lower() not in ('angular', 'cosine', 'normalized'):
+            raise ValueError(f'Expected angular/cosine/unit-normalized, found {distance!r}')
         if train.ndim != 2 or test.ndim != 2 or train.shape[1] != dimension or test.shape[1] != dimension:
             raise ValueError('Vector shape/dimension mismatch')
         if not train.shape[0] or not test.shape[0] or neighbors.ndim != 2 or neighbors.shape[0] != test.shape[0] or neighbors.shape[1] == 0:
@@ -54,7 +54,7 @@ def main():
              8+4*metadata['queries']*metadata['neighbor_width']]
     if marker.exists():
         saved = json.loads(marker.read_text())
-        if all(saved.get(k) == v for k,v in identity.items()) and all(p.exists() and p.stat().st_size == n for p,n in zip(paths,sizes)):
+        if all(saved.get(k) == v for k,v in identity.items()) and (not args.sha256 or saved.get('sha256') == args.sha256) and all(p.exists() and p.stat().st_size == n for p,n in zip(paths,sizes)):
             print(f'REUSE prepared {args.dataset}', flush=True); return
     digest = hashlib.sha256()
     with args.hdf5.open('rb') as stream:
@@ -75,6 +75,8 @@ def main():
                     if not np.isfinite(x).all(): raise ValueError(f'{name}: non-finite vectors at {begin}')
                     norms = np.linalg.norm(x.astype(np.float64),axis=1)
                     if (norms == 0).any(): raise ValueError(f'{name}: zero vector; cosine undefined (row batch {begin})')
+                    if metadata['source_metric'].lower() == 'normalized' and np.max(np.abs(norms-1.0)) > 5e-4:
+                        raise ValueError(f'{name}: source declares normalized but contains non-unit vectors at {begin}')
                     smallest=min(smallest,float(norms.min())); largest=max(largest,float(norms.max()))
                     packed=np.empty((len(x),args.dimension+1),dtype='<f4')
                     packed.view('<i4')[:,0]=args.dimension; packed[:,1:]=x

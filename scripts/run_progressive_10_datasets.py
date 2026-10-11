@@ -64,7 +64,7 @@ def main():
     parser.add_argument('--dbpedia-root',type=Path)
     parser.add_argument('--log-dir',type=Path,required=True)
     parser.add_argument('--config',type=Path,default=ROOT/'scripts/progressive_10_profiles.json')
-    parser.add_argument('--datasets',nargs='+',help='comma/space-separated subset')
+    parser.add_argument('--datasets',nargs='+',help='comma/space-separated subset; default excludes SIFT1B; --datasets sift1b runs it separately')
     parser.add_argument('--stage',choices=['fixed','sweep'],default='fixed')
     parser.add_argument('--phase',choices=['all','perf','stats'],default='all')
     parser.add_argument('--scope',choices=['profile','global','per_list','both'],default='profile')
@@ -88,7 +88,7 @@ def main():
     parser.add_argument('--dry-run',action='store_true')
     args=parser.parse_args()
     profiles=json.loads(args.config.read_text());validate_profiles(profiles)
-    datasets=list(profiles) if not args.datasets else ' '.join(args.datasets).replace(',',' ').split()
+    datasets=[ds for ds in profiles if ds != 'sift1b'] if not args.datasets else ' '.join(args.datasets).replace(',',' ').split()
     if not datasets or len(set(datasets))!=len(datasets) or any(ds not in profiles for ds in datasets):
         parser.error('datasets must be a unique subset of config (NUS-WIDE/SpaceV excluded)')
     if min(args.threads,args.repeats,*args.blocks,*args.ppd_blocks)<1 or args.warmups<0 or (args.loops is not None and args.loops<1) or (args.nq is not None and args.nq<0):

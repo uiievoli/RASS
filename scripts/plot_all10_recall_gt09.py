@@ -376,7 +376,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--datasets",
-        help="Comma-separated dataset names; defaults to all ten datasets",
+        help="Comma-separated dataset names; defaults to the legacy suite excluding SIFT1B",
     )
     args = parser.parse_args()
     if args.datasets:
@@ -387,6 +387,8 @@ def main() -> None:
         if not requested:
             parser.error("--datasets must contain at least one dataset")
         DATASETS = requested
+    else:
+        DATASETS = [ds for ds in DATASETS if ds != "sift1b"]
     output = args.output_dir or args.log_root / "plots_recall_gt09"
     output.mkdir(parents=True, exist_ok=True)
 

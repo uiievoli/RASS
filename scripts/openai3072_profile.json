@@ -1,0 +1,20 @@
+{
+  "simplewiki-openai-3072-normalized": {
+    "nlist": 512,
+    "scope": "per_list",
+    "pmax": 512,
+    "best_p": {"global": 256, "per_list": 256},
+    "fixed_nprobes": [128],
+    "nprobes": [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512],
+    "k": 1,
+    "nq": 0,
+    "loops": 3,
+    "seed": 0,
+    "normalize": true,
+    "input_format": "fvecs",
+    "groundtruth": "result/official_neighbors.i32bin",
+    "ppd": true,
+    "best_status": "untuned_reference_replace_after_fine_scan",
+    "input_labels": "not_applicable"
+  }
+}

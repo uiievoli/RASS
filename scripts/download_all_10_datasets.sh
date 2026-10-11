@@ -22,13 +22,13 @@ Usage:
 Options:
   --data-root DIR       Final Tribase dataset root (required).
   --raw-dir DIR         Archive/raw download root; default DATA_ROOT/.downloads.
-  --datasets LIST       Comma/space-separated subset of the eight datasets.
+  --datasets LIST       Explicit selection; default excludes SIFT1B (HandOutlines supported).
   --dry-run             Print download and preparation commands only.
   -h, --help            Show this help.
 
 Dataset names:
   nuswide fasion_mnist_784 msong_holdout sift1m glove25
-  StarLightCurves dbpedia1536m_holdout sift1b
+  StarLightCurves HandOutlines dbpedia1536m_holdout sift1b
 
 The first six datasets are extracted as ready-to-use fvecs. DBpedia is
 downloaded from Hugging Face Parquet and prepared as a disjoint fvecs holdout.
@@ -56,13 +56,13 @@ done
 RAW_DIR="${RAW_DIR:-${DATA_ROOT}/.downloads}"
 
 BUNDLE_DATASETS=(
-  nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves
+  nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves HandOutlines
 )
 ALL_DATASETS=("${BUNDLE_DATASETS[@]}" dbpedia1536m_holdout sift1b)
 
 selected() {
   local needle="$1"
-  [[ -z "${ONLY_DATASETS}" ]] && return 0
+  [[ -z "${ONLY_DATASETS}" ]] && { [[ "${needle}" != sift1b ]]; return; }
   local normalized=" ${ONLY_DATASETS//,/ } "
   [[ "${normalized}" == *" ${needle} "* ]]
 }
@@ -142,19 +142,19 @@ PY
 
 bundle_needed=0
 for dataset in "${BUNDLE_DATASETS[@]}"; do
-  selected "${dataset}" && bundle_needed=1
+  if selected "${dataset}" && [[ ! -s "${DATA_ROOT}/${dataset}/origin/${dataset}_base.fvecs" ||
+                                 ! -s "${DATA_ROOT}/${dataset}/origin/${dataset}_query.fvecs" ]]; then
+    bundle_needed=1
+  fi
 done
 
 if ((bundle_needed)); then
   need unzip
-  if ! command -v gdown >/dev/null && ((!DRY_RUN)); then
-    echo "The Tribase bundle requires gdown: python3 -m pip install gdown" >&2
-    exit 1
-  fi
   bundle_zip="${RAW_DIR}/tribase-benchmarks.zip"
   bundle_extract="${RAW_DIR}/tribase-benchmarks"
   bundle_marker="${bundle_extract}/.extract-complete"
   if [[ ! -s "${bundle_zip}" ]]; then
+    need gdown
     run mkdir -p "${RAW_DIR}"
     log "DOWNLOAD Tribase benchmark bundle"
     # Passing the Drive file ID directly works with both older gdown releases
@@ -167,7 +167,7 @@ if ((bundle_needed)); then
     run unzip -n "${bundle_zip}" -d "${bundle_extract}"
     run touch "${bundle_marker}"
   fi
-  for dataset in nuswide fasion_mnist_784 sift1m glove25 StarLightCurves; do
+  for dataset in nuswide fasion_mnist_784 sift1m glove25 StarLightCurves HandOutlines; do
     selected "${dataset}" || continue
     target="${DATA_ROOT}/${dataset}/origin"
     if [[ -s "${target}/${dataset}_base.fvecs" && -s "${target}/${dataset}_query.fvecs" ]]; then
@@ -182,6 +182,10 @@ if ((bundle_needed)); then
     [[ -n "${source_origin}" ]] || { echo "${dataset}/origin not found in bundle" >&2; exit 1; }
     mkdir -p "${target}"
     cp -a "${source_origin}/." "${target}/"
+    if [[ -d "${source_origin%/origin}/result" ]]; then
+      mkdir -p "${DATA_ROOT}/${dataset}/result"
+      cp -an "${source_origin%/origin}/result/." "${DATA_ROOT}/${dataset}/result/"
+    fi
   done
   if selected msong_holdout; then
     msong_target="${DATA_ROOT}/msong/origin"
@@ -281,7 +285,7 @@ fi
 
 if ((!DRY_RUN)); then
   failed=0
-  for dataset in nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves dbpedia1536m_holdout; do
+  for dataset in nuswide fasion_mnist_784 msong_holdout sift1m glove25 StarLightCurves HandOutlines dbpedia1536m_holdout; do
     selected "${dataset}" || continue
     for path in \
       "${DATA_ROOT}/${dataset}/origin/${dataset}_base.fvecs" \

@@ -14,12 +14,12 @@ def main():
     parser.add_argument('--cosine-root',type=Path);parser.add_argument('--dbpedia-root',type=Path)
     parser.add_argument('--output-root',type=Path,required=True)
     parser.add_argument('--config',type=Path,default=Path(__file__).with_name('progressive_10_profiles.json'))
-    parser.add_argument('--datasets',nargs='+')
+    parser.add_argument('--datasets',nargs='+',help='explicit subset; default excludes SIFT1B')
     parser.add_argument('--fraction',type=float,default=.2);parser.add_argument('--seed',type=int,default=20261011)
     args=parser.parse_args()
     if not 0<args.fraction<1:parser.error('fraction must be strictly between 0 and 1')
     profiles=json.loads(args.config.read_text())
-    datasets=list(profiles) if not args.datasets else ' '.join(args.datasets).replace(',',' ').split()
+    datasets=[ds for ds in profiles if ds != 'sift1b'] if not args.datasets else ' '.join(args.datasets).replace(',',' ').split()
     if any(ds not in profiles for ds in datasets):parser.error('unknown dataset')
     for ds in datasets:
         p=profiles[ds]

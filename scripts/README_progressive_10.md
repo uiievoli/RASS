@@ -1,8 +1,9 @@
 # RASS progressive experiments: ten datasets
 
-Entry point: `scripts/run_progressive_10_datasets.py`. Defaults include the eight
-original datasets other than NUS-WIDE/SpaceV, plus GloVe-200-angular and
-Landmark-DINO-768-cosine. HandOutlines is included as a small-workload boundary
+Entry point: `scripts/run_progressive_10_datasets.py`. Default runs now exclude
+SIFT1B, NUS-WIDE and SpaceV: nine datasets remain, including GloVe-200-angular
+and Landmark-DINO-768-cosine. SIFT1B is retained in the profile registry for
+explicit separate runs with `--datasets sift1b`. HandOutlines is included as a small-workload boundary
 case. Profiles are editable in `scripts/progressive_10_profiles.json`.
 
 ## Build in separate directories
@@ -122,7 +123,8 @@ Old k=10 curves are not reused for this comparison; nprobe must be recalibrated.
 The input files are byte-coded but the current production pipeline stores float
 vectors in RAM. Use the large-memory server. PPD is disabled for SIFT1B by
 default; `--include-sift1b-ppd` explicitly enables its full-dimensional sidecar.
-For full ten-dataset runs omit `--datasets` after confirming hardware capacity.
+Omitting `--datasets` runs the nine non-SIFT1B profiles. SIFT1B must be selected
+explicitly with `--datasets sift1b`; no existing index/data files are deleted.
 
 ## Controls, caches and outputs
 
