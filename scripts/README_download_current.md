@@ -12,12 +12,12 @@ bash scripts/download_current_datasets.sh \
 The default suite contains ten active datasets (SIFT1B is temporarily isolated): Fashion-MNIST (`fasion_mnist_784`),
 MillionSong (`msong_holdout`), SIFT1M, GloVe25, HandOutlines, StarLightCurves,
 DBpedia1536 holdout, GloVe-200-angular, Landmark-DINO-768-cosine and
-SimpleWiki-OpenAI-3072-normalized. NUS-WIDE and SpaceV are excluded.
+DBpedia-OpenAI-3072 holdout. NUS-WIDE and SpaceV are excluded.
 HandOutlines is included in the current ten-dataset comparison plus the new
 OpenAI supplement. SIFT1B remains available only through explicit
 `--datasets sift1b`; its data and indexes are preserved.
 
-Use `--datasets "glove-200-angular,landmark-dino-768-cosine,simplewiki-openai-3072-normalized"`
+Use `--datasets "glove-200-angular,landmark-dino-768-cosine,dbpedia3072m_holdout"`
 to download a subset. Add `--dry-run` to preview download/preparation commands.
 
 The entry point checks vector headers, dimensions and file sizes before deciding

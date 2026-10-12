@@ -43,7 +43,7 @@ def main():
     parser.add_argument('--pmax',type=int,default=512)
     parser.add_argument('--step',type=int,default=4)
     parser.add_argument('--refine-radius',type=int,default=16)
-    parser.add_argument('--nlist',type=int,default=512)
+    parser.add_argument('--nlist',type=int,default=1000)
     parser.add_argument('--nprobe',type=int,help='manual fixed point; otherwise first calibrated recall >= target')
     parser.add_argument('--target-recall',type=float,default=.99)
     parser.add_argument('--nq',type=int,default=0)
@@ -79,7 +79,8 @@ def main():
         base=data/ds/'origin'/f'{ds}_base.fvecs'
         with base.open('rb') as f:dimension=struct.unpack('<I',f.read(4))[0]
         if dimension!=args.expected_dimension:raise ValueError(f'expected {args.expected_dimension}D, found {dimension}')
-        inputs=[base,data/ds/'origin'/f'{ds}_query.fvecs',data/ds/p['groundtruth']]
+        inputs=[base,data/ds/'origin'/f'{ds}_query.fvecs']
+        if p['groundtruth']:inputs.append(data/ds/p['groundtruth'])
         protocol['input_state']={str(path):{'bytes':path.stat().st_size,'mtime_ns':path.stat().st_mtime_ns} for path in inputs}
         protocol['binary_sha256']={kind:fingerprint(path) for kind,path in bins.items()}
         root.mkdir(parents=True,exist_ok=True)
@@ -159,13 +160,14 @@ def main():
                         command=['taskset','-c',args.cpus,bins[phase],'--benchmarks_path',data,'--dataset',ds,
                             '--input_format','fvecs','--output_format','bin','--normalize','--metric','l2',
                             '--k',str(p['k']),'--nq',str(args.nq),'--nlist',str(args.nlist),'--nprobes',str(selected),
-                            '--groundtruth_path',data/ds/p['groundtruth'],'--opt_levels','OPT_TRIANGLE',
+                            '--opt_levels','OPT_TRIANGLE',
                             '--multipivot_modes','projection','--multipivot_scope',scope,'--multipivot_method','pca',
                             '--pivot_seed',str(p['seed']),'--pivot_counts',str(args.pmax),
                             '--active_pivot_counts',*map(str,order),'--signature_precision','float32',
                             '--loop',str(args.loops if phase=='perf' else 1),'--warmup_loops',str(args.warmups),
                             '--load_index',banks[scope],'--pivot_manifest',directory/'manifest.csv',
                             '--csv',output.with_suffix('.csv.partial')]
+                        if p['groundtruth']:command+=['--groundtruth_path',data/ds/p['groundtruth']]
                         execute(command,output.with_suffix('.log'),phase)
                         if not args.dry_run:
                             rows=read(output.with_suffix('.csv.partial'))

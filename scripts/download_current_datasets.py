@@ -13,7 +13,7 @@ DATASETS = (
     'fasion_mnist_784', 'msong_holdout', 'sift1m', 'glove25',
     'HandOutlines', 'StarLightCurves', 'dbpedia1536m_holdout', 'sift1b',
     'glove-200-angular', 'landmark-dino-768-cosine',
-    'simplewiki-openai-3072-normalized',
+    'dbpedia3072m_holdout',
 )
 # Keep the source adapter available, but never download SIFT1B implicitly.
 DEFAULT_DATASETS = tuple(ds for ds in DATASETS if ds != 'sift1b')
@@ -57,6 +57,11 @@ def prepared(root, dataset):
         query = vector_shape(origin / f'{dataset}_query.fvecs')
         if base[1] != query[1]:
             return False
+        if dataset == 'dbpedia3072m_holdout':
+            metadata = json.loads((origin / f'{dataset}_meta.json').read_text())
+            return (base == (999000,3072) and query == (1000,3072)
+                    and metadata.get('holdout') is True and metadata.get('seed') == 42
+                    and metadata.get('source',{}).get('revision') == 'b2f301648eda4c5dbe659235589c86ffec702581')
         if dataset in COSINE_DIMS:
             metadata = json.loads((origin / 'cosine_source.json').read_text())
             if base != (metadata['base_vectors'], COSINE_DIMS[dataset]) or query != (metadata['queries'], COSINE_DIMS[dataset]):
@@ -97,8 +102,8 @@ def main():
             log(f'SKIP prepared {dataset} (headers, dimensions and file sizes checked)')
             continue
         log(f'PREPARE missing/incomplete {dataset}')
-        if dataset == 'simplewiki-openai-3072-normalized':
-            script, cache = 'download_openai3072.sh', raw / 'openai3072'
+        if dataset == 'dbpedia3072m_holdout':
+            script, cache = 'download_dbpedia3072.sh', raw / 'dbpedia3072'
             selection = []
         elif dataset in COSINE_DIMS:
             script, cache = 'download_cosine_datasets.sh', raw
