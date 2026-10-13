@@ -1450,6 +1450,16 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                 size_t scan_begin = 0;
                 size_t scan_end = list_size;
 
+#ifdef TRIBASE_ENABLE_STATS
+                const float diagnostic_entry_tau2 = simi[0];
+                const idx_t diagnostic_entry_id = idxi[0];
+                const double diagnostic_entry_prior = best_log_survival_per_dimension;
+                const bool diagnostic_prior_valid = previous_dynamic_observation_valid;
+                const size_t diagnostic_ready_dims = multipivot_scope == MultiPivotScope::GLOBAL
+                    ? global_projection_ready_dims : 0;
+                const bool diagnostic_full_ready = global_full_query_signature_ready;
+#endif
+
                 if (opt_level & OptLevel::OPT_TRIANGLE) {
                     const float* sqrt_candidate2centroid = list.get_sqrt_candidate2centroid();
                     const float* candidate2centroid = list.get_candidate2centroid();
@@ -1910,6 +1920,16 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
 #endif
                 scaner->progressive_geometry = multipivot_scope == MultiPivotScope::GLOBAL
                     ? &global_pivots : &list.pivots;
+#ifdef TRIBASE_ENABLE_STATS
+                const size_t diagnostic_scan_limit=active_pivots;
+#endif
+                IF_STATS {
+                    if (stats->collect_list_stats) {
+                        stats->diagnostic_query_id=stats->query_offset+i;
+                        stats->diagnostic_probe_rank=j;
+                        stats->diagnostic_list_id=listids[j];
+                    }
+                }
                 scaner->scan_codes(scan_begin, scan_end, list_size, list.get_candidate_codes(), list.get_candidate_id(), list.get_candidate_norms(), centroid2query, list.get_candidate2centroid(),
                                    list.get_sqrt_candidate2centroid(), sub_k, list.get_sub_nearest_IP_id(),
                                    list.get_sub_nearest_IP_dis(), list.get_sub_farest_IP_id(), list.get_sub_farest_IP_dis(),
@@ -1985,6 +2005,26 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                         visit.pivot_distances =
                             stats->pivot_distance_computations - pivot_distances_before;
                         visit.simi_update = stats->simi_update_count - simi_before;
+#ifdef TRIBASE_ENABLE_STATS
+                        visit.entry_tau2=diagnostic_entry_tau2;
+                        visit.entry_heap_id=diagnostic_entry_id;
+                        visit.entry_log_survival=diagnostic_entry_prior;
+                        visit.entry_prior_valid=diagnostic_prior_valid;
+                        visit.entry_ready_dims=diagnostic_ready_dims;
+                        visit.entry_full_signature_ready=diagnostic_full_ready;
+                        visit.initial_pivot_budget=dynamic_pivot_budget;
+                        visit.progressive_policy=projection_progressive;
+                        visit.forced_exploration=dynamic_exploration_forced;
+                        visit.scan_pivot_limit=diagnostic_scan_limit;
+                        visit.progressive_seed_dims=scaner->progressive_seed_dims;
+                        visit.effective_progressive_mode=scaner->progressive_mode;
+                        visit.used_dynamic_prefix=use_dynamic_prefix_for_list;
+                        visit.projection_block_size=projection_block_size;
+                        visit.predicted_prune_rate=diagnostic_prior_valid
+                            ? std::clamp(-std::expm1(diagnostic_entry_prior *
+                                static_cast<double>(active_pivots ? active_pivots-1 : 0)),0.0,0.9999)
+                            : std::numeric_limits<double>::quiet_NaN();
+#endif
                         stats->list_visits.push_back(visit);
                     }
                 }

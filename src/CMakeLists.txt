@@ -25,6 +25,13 @@ target_link_libraries(query Tribase faiss)
 add_executable(ppd_query ppd_query.cpp)
 target_link_libraries(ppd_query Tribase faiss)
 
+# Offline controlled experiment: copy the exact PPD PCA basis into a native bank.
+add_executable(import_ppd_basis import_ppd_basis.cpp)
+target_link_libraries(import_ppd_basis Tribase faiss)
+
+add_executable(replay_pivot_choice replay_pivot_choice.cpp)
+target_link_libraries(replay_pivot_choice Tribase faiss)
+
 add_executable(prune_comparison prune_comparison.cpp)
 target_link_libraries(prune_comparison Tribase faiss)
 

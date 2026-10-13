@@ -1317,6 +1317,9 @@ int main(int argc, char* argv[]) {
                     listVisitsToCsv(dump_list_stats_path, stats.list_visits, list_stats_header_written, dataset,
                                     nlist, nprobe, opt_level, multipivot_mode, multipivot_scope,
                                     multipivot_method, pivot_count, pivot_seed, ratio);
+                    if (!stats.prediction_stages.empty())
+                        predictionStagesToCsv(dump_list_stats_path+".stages.csv",stats.prediction_stages,
+                                              list_stats_header_written,nlist,nprobe);
                     list_stats_header_written = true;
                     if (verbose) {
                         std::cout << std::format("Wrote {} list visits to {}", stats.list_visits.size(),

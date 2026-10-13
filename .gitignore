@@ -48,3 +48,5 @@ reports
 /docs
 /datasets/cosine_supplement/
 /datasets/openai_supplement/
+/build-predictor-perf/
+/build-predictor-stats/

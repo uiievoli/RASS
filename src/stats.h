@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -35,6 +36,20 @@ struct ListVisitStat {
     size_t candidate_distances = 0;
     size_t pivot_distances = 0;
     size_t simi_update = 0;
+    float entry_tau2 = 0;
+    idx_t entry_heap_id = -1;
+    double entry_log_survival = 0;
+    bool entry_prior_valid = false;
+    size_t entry_ready_dims = 0;
+    bool entry_full_signature_ready = false;
+    size_t initial_pivot_budget = 0;
+    int progressive_policy = 0;
+    bool forced_exploration = false;
+    double predicted_prune_rate = std::numeric_limits<double>::quiet_NaN();
+    size_t scan_pivot_limit=0, progressive_seed_dims=0;
+    int effective_progressive_mode=0;
+    bool used_dynamic_prefix=false;
+    size_t projection_block_size=0;
 
     size_t scanned() const { return scan_end > scan_begin ? scan_end - scan_begin : 0; }
     // Vectors that still need a distance after triangle + subnn pruning on this list.
@@ -64,7 +79,11 @@ inline void listVisitsToCsv(const std::string& filename,
                       "tri", "tri_large", "subnn_L2", "subnn_IP",
                       "multipivot_checks", "multipivot_pruned", "multipivot_invalid",
                       "active_pivots", "candidate_distances", "pivot_distances",
-                      "simi_update", "dis_calculate"},
+                      "simi_update", "dis_calculate", "entry_tau2", "entry_heap_id",
+                      "entry_log_survival", "entry_prior_valid", "entry_ready_dims",
+                      "entry_full_signature_ready", "initial_pivot_budget", "progressive_policy",
+                      "forced_exploration", "predicted_prune_rate", "entry_tau2_bits", "centroid2query_bits",
+                      "scan_pivot_limit","progressive_seed_dims","effective_progressive_mode","used_dynamic_prefix","projection_block_size"},
                      append, false);
     for (const auto& v : visits) {
         writer << dataset << nlist << nprobe << static_cast<int>(opt_level)
@@ -75,8 +94,32 @@ inline void listVisitsToCsv(const std::string& filename,
                << v.tri << v.tri_large << v.subnn_L2 << v.subnn_IP
                << v.multipivot_checks << v.multipivot_pruned << v.multipivot_invalid
                << v.active_pivots << v.candidate_distances << v.pivot_distances
-               << v.simi_update << v.dis_calculate() << std::endl;
+               << v.simi_update << v.dis_calculate() << v.entry_tau2 << v.entry_heap_id
+               << v.entry_log_survival << v.entry_prior_valid << v.entry_ready_dims
+               << v.entry_full_signature_ready << v.initial_pivot_budget << v.progressive_policy
+               << v.forced_exploration << v.predicted_prune_rate
+               << std::bit_cast<uint32_t>(v.entry_tau2) << std::bit_cast<uint32_t>(v.centroid2query)
+               << v.scan_pivot_limit << v.progressive_seed_dims << v.effective_progressive_mode << v.used_dynamic_prefix << v.projection_block_size << std::endl;
     }
+}
+
+struct PredictionStageStat {
+    size_t query_id=0, probe_rank=0, list_id=0, prefix=0, next_prefix=0;
+    size_t survivors=0, pruned=0, new_query_dims=0;
+    double prior=0, predicted_rate=0;
+    float tau2=0;
+    bool forced=false, proceeded=false;
+};
+
+inline void predictionStagesToCsv(const std::string& path,
+                                  const std::vector<PredictionStageStat>& stages,
+                                  bool append, size_t nlist, size_t nprobe) {
+    CsvWriter writer(path,{"nlist","nprobe","query_id","probe_rank","list_id","prefix","next_prefix",
+                          "survivors","pruned","new_query_dims","prior","predicted_rate","tau2","forced","proceeded"},append,false);
+    for (const auto& s:stages)
+        writer << nlist << nprobe << s.query_id << s.probe_rank << s.list_id << s.prefix << s.next_prefix
+               << s.survivors << s.pruned << s.new_query_dims << s.prior << s.predicted_rate << s.tau2
+               << s.forced << s.proceeded << std::endl;
 }
 
 class Stats {
@@ -163,6 +206,8 @@ class Stats {
     bool collect_list_stats = false;
     size_t query_offset = 0;
     std::vector<ListVisitStat> list_visits;
+    size_t diagnostic_query_id=0, diagnostic_probe_rank=0, diagnostic_list_id=0;
+    std::vector<PredictionStageStat> prediction_stages;
 
     // summary
    private:
@@ -229,6 +274,7 @@ class Stats {
         simi_ratio = 0;
         n_query = 0;
         list_visits.clear();
+        prediction_stages.clear();
     }
 
     Stats() { reset(); }
@@ -400,6 +446,7 @@ inline Stats mergeStats(std::vector<Stats>& stats) {
             merged.list_visits.insert(merged.list_visits.end(),
                                       s.list_visits.begin(), s.list_visits.end());
         }
+        merged.prediction_stages.insert(merged.prediction_stages.end(),s.prediction_stages.begin(),s.prediction_stages.end());
         merged.collect_list_stats = merged.collect_list_stats || s.collect_list_stats;
     }
     return merged;

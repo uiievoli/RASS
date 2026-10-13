@@ -235,6 +235,7 @@ class IVFScan : public IVFScanBase {
                     float i_ratio = 1) override {
         last_multipivot_checks = 0;
         last_multipivot_pruned = 0;
+        last_progressive_dims = 0;
         float max_radius;
         float diff_cos, diff_sin;
         float max_radius_plus_centroid2query;
@@ -382,6 +383,16 @@ class IVFScan : public IVFScanBase {
                         if (population * rho * d <= new_dims * static_cast<double>(d) +
                             population * (delta + 9.0)) {
 #ifdef TRIBASE_ENABLE_STATS
+                            if (stats && stats->collect_list_stats) {
+                                PredictionStageStat event;
+                                event.query_id=stats->diagnostic_query_id;event.probe_rank=stats->diagnostic_probe_rank;
+                                event.list_id=stats->diagnostic_list_id;event.next_prefix=delta;
+                                event.survivors=scan_end-scan_begin;event.new_query_dims=new_dims;
+                                event.prior=progressive_prior;event.predicted_rate=rho;event.tau2=simi[0];
+                                stats->prediction_stages.push_back(event);
+                            }
+#endif
+#ifdef TRIBASE_ENABLE_STATS
                             if (stats) stats->progressive_control_seconds +=
                                 std::chrono::duration<double>(std::chrono::steady_clock::now() - tick).count();
 #endif
@@ -433,6 +444,20 @@ class IVFScan : public IVFScanBase {
                             active.size() * (delta_dims + 6.0 + 3.0);
                         const bool seed = rank == 0 && progressive_seed_dims != 0;
                         const bool proceed = seed || predicted_saved * d > refinement_cost;
+#ifdef TRIBASE_ENABLE_STATS
+                        PredictionStageStat prediction_event;
+                        if (stats && stats->collect_list_stats) {
+                            prediction_event.query_id=stats->diagnostic_query_id;
+                            prediction_event.probe_rank=stats->diagnostic_probe_rank;
+                            prediction_event.list_id=stats->diagnostic_list_id;
+                            prediction_event.prefix=rank;prediction_event.next_prefix=next;
+                            prediction_event.survivors=active.size();prediction_event.new_query_dims=new_dims;
+                            prediction_event.prior=prior;prediction_event.predicted_rate=rho;
+                            prediction_event.tau2=simi[0];prediction_event.forced=seed;
+                            prediction_event.proceeded=proceed;
+                            if (!proceed) stats->prediction_stages.push_back(prediction_event);
+                        }
+#endif
 #ifdef TRIBASE_ENABLE_STATS
                         if (stats) stats->progressive_control_seconds +=
                             std::chrono::duration<double>(std::chrono::steady_clock::now() - tick).count();
@@ -515,6 +540,12 @@ class IVFScan : public IVFScanBase {
                         }
                         active.resize(remaining); scores.resize(remaining); energies.resize(remaining);
                         last_multipivot_pruned += before - remaining;
+#ifdef TRIBASE_ENABLE_STATS
+                        if (stats && stats->collect_list_stats) {
+                            prediction_event.pruned=before-remaining;
+                            stats->prediction_stages.push_back(prediction_event);
+                        }
+#endif
                         IF_STATS { stats->multipivot_pruned += before - remaining; }
                         if (progressive_mode == 2) {
                             // Dimension-weighted smoothing of log survival per direction.
