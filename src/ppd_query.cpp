@@ -34,6 +34,8 @@ int main(int argc, char** argv) {
     program.add_argument("--warmup-loops").scan<'u', size_t>().default_value(size_t{1});
     program.add_argument("--normalize").flag().help("normalize queries before timing; requires a unit-vector IVF index");
     program.add_argument("--build-only").flag().help("prepare/load sidecar and exit before search");
+    program.add_argument("--no-save-sidecar").flag().help(
+        "build PPD in memory and run queries without writing the transformed database");
     program.add_argument("--dump-search-results").default_value(std::string{});
     program.add_argument("--triangle").flag();
     program.add_argument("--rebuild-sidecar").flag();
@@ -83,17 +85,25 @@ int main(int argc, char** argv) {
     }
     PpdIndex ppd;
     const bool rebuild = program.get<bool>("--rebuild-sidecar");
-    if (!rebuild && std::filesystem::exists(sidecar_path)) {
+    const bool no_save_sidecar = program.get<bool>("--no-save-sidecar");
+    if (no_save_sidecar && program.get<bool>("--build-only")) {
+        throw std::invalid_argument("--no-save-sidecar cannot be combined with --build-only");
+    }
+    if (!no_save_sidecar && !rebuild && std::filesystem::exists(sidecar_path)) {
         std::cout << "Loading PPD sidecar " << sidecar_path << std::endl;
         ppd.load(sidecar_path, index);
     } else {
         std::cout << std::format("Building PPD sidecar: samples={} d={} lists={}\n",
                                  train_samples, index.d, index.nlist);
         ppd.build(index, train_samples == 0 ? std::numeric_limits<size_t>::max() : train_samples, seed);
-        const std::string partial = sidecar_path + ".partial";
-        ppd.save(partial);
-        std::filesystem::rename(partial, sidecar_path);
-        std::cout << "Saved PPD sidecar " << sidecar_path << std::endl;
+        if (no_save_sidecar) {
+            std::cout << "Keeping PPD transformed database in memory; sidecar save disabled" << std::endl;
+        } else {
+            const std::string partial = sidecar_path + ".partial";
+            ppd.save(partial);
+            std::filesystem::rename(partial, sidecar_path);
+            std::cout << "Saved PPD sidecar " << sidecar_path << std::endl;
+        }
     }
     if (train_samples == 0) {
         size_t base_count = 0;
