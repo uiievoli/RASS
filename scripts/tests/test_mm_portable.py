@@ -58,6 +58,44 @@ class PortableMMTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             RUNNER.sample_queries(self.source, output, 2, 19)
 
+    def test_small_preset_is_explicit_and_excludes_retired_or_large_data(self):
+        self.assertEqual(RUNNER.PRESETS['small'], (
+            'fasion_mnist_784', 'msong_holdout', 'sift1m', 'glove25', 'StarLightCurves'))
+        for excluded in ['nuswide', 'HandOutlines', 'spacev1b',
+                         'dbpedia1536m_holdout', 'sift1b']:
+            self.assertNotIn(excluded, RUNNER.PRESETS['small'])
+        for dataset in RUNNER.PRESETS['small']:
+            profile = RUNNER.DEFAULTS[dataset]
+            self.assertGreaterEqual(len(profile['nprobes']), 2)
+            self.assertGreater(profile['directions'], 1)
+
+    def test_active_preset_adds_dbpedia_but_not_billion_scale_data(self):
+        self.assertEqual(RUNNER.PRESETS['active'], RUNNER.PRESETS['small'] +
+                         ('dbpedia1536m_holdout',))
+        for excluded in ['sift1b', 'spacev1b']:
+            self.assertNotIn(excluded, RUNNER.PRESETS['active'])
+
+    def test_reusable_index_prefers_current_canonical_p0(self):
+        directory = self.root / 'index'
+        directory.mkdir()
+        prefix = 'v10_nlist_1000_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_per_list_pca_P0_seed'
+        canonical = directory / f'{prefix}0.index'
+        alternate = directory / f'{prefix}20261005.index'
+        legacy = directory / prefix.replace('v10_', 'v9_')
+        canonical.touch()
+        alternate.touch()
+        legacy.with_name(legacy.name + '0.index').touch()
+        self.assertEqual(RUNNER.reusable_triangle_index(directory, 1000), canonical)
+
+    def test_reusable_index_rejects_ambiguous_noncanonical_files(self):
+        directory = self.root / 'index'
+        directory.mkdir()
+        prefix = 'v10_nlist_1000_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_per_list_pca_P0_seed'
+        (directory / f'{prefix}7.index').touch()
+        (directory / f'{prefix}8.index').touch()
+        with self.assertRaises(ValueError):
+            RUNNER.reusable_triangle_index(directory, 1000)
+
 
 if __name__ == '__main__':
     unittest.main()

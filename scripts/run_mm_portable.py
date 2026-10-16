@@ -17,10 +17,22 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 METHODS = ('mm_once', 'mm_stage_frozen_reuse')
-# Match run_mm_quantity_policy.py / run_mm_scan_order.py, not old per-list sweeps.
+# M is the number of PCA directions and excludes the fixed centroid.  The small
+# preset uses the established high-recall probe and one deeper probe so that MM
+# is measured both near the operating point and later in the list traversal.
 DEFAULTS = {
+    'fasion_mnist_784': dict(nlist=256, directions=95, nprobes=[7, 20], nq=32, loops=10),
+    'msong_holdout': dict(nlist=1000, directions=95, nprobes=[16, 50], nq=32, loops=5),
     'sift1m': dict(nlist=1000, directions=128, nprobes=[34, 100], nq=32, loops=5),
+    'glove25': dict(nlist=1024, directions=25, nprobes=[50, 100], nq=32, loops=10),
+    'StarLightCurves': dict(nlist=128, directions=103, nprobes=[4, 10], nq=32, loops=50),
     'dbpedia1536m_holdout': dict(nlist=1000, directions=256, nprobes=[160], nq=20, loops=1),
+}
+PRESETS = {
+    'small': ('fasion_mnist_784', 'msong_holdout', 'sift1m', 'glove25', 'StarLightCurves'),
+    'active': ('fasion_mnist_784', 'msong_holdout', 'sift1m', 'glove25',
+               'StarLightCurves', 'dbpedia1536m_holdout'),
+    'reference': ('sift1m', 'dbpedia1536m_holdout'),
 }
 
 
@@ -49,8 +61,25 @@ def write_csv(path, records):
         writer.writerows(records)
 
 
-def run(command, log, env):
-    command = list(map(str, command))
+def reusable_triangle_index(index_dir, nlist):
+    """Choose only a current-format P0 Triangle index, deterministically."""
+    pattern = (f'v10_nlist_{nlist}_metric_l2_opt_1_subk_15_subNprobeRatio_1_'
+               'mp_*_P0_seed*.index')
+    candidates = sorted(index_dir.glob(pattern))
+    canonical = [path for path in candidates if path.name.endswith('_P0_seed0.index')]
+    if len(canonical) == 1:
+        return canonical[0]
+    if len(canonical) > 1:
+        raise ValueError(f'multiple canonical v10 P0 Triangle indexes in {index_dir}')
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise ValueError(f'multiple v10 P0 Triangle indexes in {index_dir}; specify --index')
+    return None
+
+
+def run(command, log, env, prefix=()):
+    command = [*map(str, prefix), *map(str, command)]
     print(shlex.join(command), flush=True)
     save_json(log.with_suffix('.command.json'), command)
     with log.open('w') as stream:
@@ -169,8 +198,13 @@ def summarize(out, protocol):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', required=True, type=Path, help='parent of DATASET/origin and DATASET/index')
+    parser.add_argument('--dbpedia-root', type=Path,
+                        help='optional parent of dbpedia1536m_holdout, or the dataset directory itself')
     parser.add_argument('--log-dir', required=True, type=Path, help='fresh output directory, never overwritten')
-    parser.add_argument('--datasets', nargs='+', default=list(DEFAULTS))
+    parser.add_argument('--preset', choices=sorted(PRESETS), default='active',
+                        help='built-in dataset set; ignored when --datasets is supplied')
+    parser.add_argument('--datasets', nargs='+',
+                        help='explicit dataset names; overrides --preset')
     parser.add_argument('--index', type=Path, help='explicit Triangle L2 source index; single dataset only')
     parser.add_argument('--queries', type=Path, help='explicit fvecs queries; single dataset only')
     parser.add_argument('--dictionary', type=Path, help='optional existing float64 global bank; single dataset only')
@@ -184,12 +218,14 @@ def main():
     parser.add_argument('--seed', type=int, default=19)
     parser.add_argument('--offline-threads', type=int, default=8)
     parser.add_argument('--build-jobs', type=int, default=8)
+    parser.add_argument('--cpus', help='optional taskset CPU list, for example 0-31')
     parser.add_argument('--build-root', type=Path, default=ROOT / 'build-mm-portable')
     parser.add_argument('--skip-build', action='store_true', help='use prebuilt build-root/{perf,stats}/bin')
     parser.add_argument('--cmake-arg', action='append', default=[], help='e.g. --cmake-arg=-DCMAKE_CXX_COMPILER=g++-14')
     parser.add_argument('--build-index', action='store_true', help='build Triangle index from base.fvecs if no bare cached index')
     parser.add_argument('--summarize-only', action='store_true')
     args = parser.parse_args()
+    args.datasets = args.datasets or list(PRESETS[args.preset])
     out = args.log_dir.resolve()
     if args.summarize_only:
         summarize(out, json.loads((out / 'protocol.json').read_text()))
@@ -221,17 +257,17 @@ def main():
             parser.error('nprobes must be in 1..nlist')
         if len(set(config['nprobes'])) != len(config['nprobes']):
             parser.error('duplicate nprobes')
-        source = (args.data_dir / dataset).resolve()
+        root = args.dbpedia_root if dataset == 'dbpedia1536m_holdout' and args.dbpedia_root else args.data_dir
+        source = root.resolve() if root.name == dataset else (root / dataset).resolve()
         query = (args.queries or source / 'origin' / f'{dataset}_query.fvecs').resolve()
         if not query.is_file():
             parser.error(f'missing query: {query}')
         index = args.index.resolve() if args.index else None
         if index is None:
-            candidates = sorted((source / 'index').glob(
-                f'v*_nlist_{config["nlist"]}_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_*_P0_seed0.index'))
-            if len(candidates) > 1:
-                parser.error(f'multiple bare Triangle indexes for {dataset}; specify --index')
-            index = candidates[0] if candidates else None
+            try:
+                index = reusable_triangle_index(source / 'index', config['nlist'])
+            except ValueError as error:
+                parser.error(f'{dataset}: {error}')
         if index is not None and not index.is_file():
             parser.error(f'missing index: {index}')
         base = source / 'origin' / f'{dataset}_base.fvecs'
@@ -249,15 +285,16 @@ def main():
                TRIBASE_OFFLINE_THREADS=str(args.offline_threads))
     for key in ['TRIBASE_TRACE', 'EDGE_DEVICE_ENABLED']:
         env.pop(key, None)
+    prefix = ['taskset', '-c', args.cpus] if args.cpus else []
     build_root = args.build_root.resolve()
     for phase in ['perf', 'stats']:
         build = build_root / phase
         if not args.skip_build:
             run(['cmake', '-S', ROOT, '-B', build, '-DCMAKE_BUILD_TYPE=Release',
                  f'-DENABLE_STATS={"ON" if phase == "stats" else "OFF"}', '-DENABLE_LTO=OFF', *args.cmake_arg],
-                out / f'configure_{phase}.log', env)
+                out / f'configure_{phase}.log', env, prefix)
             run(['cmake', '--build', build, '--target', 'benchmark_query_energy',
-                 'build_global_pca_dictionary', 'query', '-j', args.build_jobs], out / f'build_{phase}.log', env)
+                 'build_global_pca_dictionary', 'query', '-j', args.build_jobs], out / f'build_{phase}.log', env, prefix)
         for target in ['benchmark_query_energy', 'build_global_pca_dictionary', 'query']:
             if not os.access(build / 'bin' / target, os.X_OK):
                 raise ValueError(f'missing executable {build / "bin" / target}')
@@ -295,14 +332,14 @@ def main():
                  '--nprobes', config['nprobes'][0], '--opt_levels', 'OPT_TRIANGLE',
                  '--multipivot_modes', 'none', '--multipivot_scope', 'global', '--multipivot_method', 'pca',
                  '--pivot_counts', 1, '--signature_precision', 'float32', '--cache', '--train_only',
-                 '--index_path', index, '--csv', directory / 'build_index.csv'], directory / 'build_index.log', env)
+                 '--index_path', index, '--csv', directory / 'build_index.csv'], directory / 'build_index.log', env, prefix)
         dictionary = args.dictionary.resolve() if args.dictionary else directory / 'dictionary.bin'
         if args.dictionary:
             if dictionary.stat().st_size != (m + 1) * d * 8:
                 raise ValueError('dictionary dimensions differ from --directions/query dimension')
         else:
             run([build_root / 'perf/bin/build_global_pca_dictionary', index, dictionary, m],
-                directory / 'dictionary.log', env)
+                directory / 'dictionary.log', env, prefix)
         provenance = dict(query=fingerprint(query), dictionary=fingerprint(dictionary),
                           index=dict(path=str(index), bytes=index.stat().st_size, mtime_ns=index.stat().st_mtime_ns))
         for nprobe in config['nprobes']:
@@ -316,7 +353,7 @@ def main():
             for phase, repeats, loops in [('stats', 1, 1), ('perf', args.repeats, config['loops'])]:
                 run([build_root / phase / 'bin/benchmark_query_energy', index, query, dictionary,
                      case_dir / f'{phase}.csv', config['nq'], repeats, loops, 1,
-                     'mm_compare', nprobe, 1, '-', '-'], case_dir / f'{phase}.log', env)
+                     'mm_compare', nprobe, 1, '-', '-'], case_dir / f'{phase}.log', env, prefix)
             case['moments'] = fingerprint(case_dir / 'projection_moments.bin')
             save_json(out / 'protocol.json', protocol)
     summarize(out, protocol)

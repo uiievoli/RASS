@@ -35,9 +35,13 @@ python3 scripts/run_mm_portable.py \
   --build-index
 ```
 
-默认运行 SIFT1M 和 DBpedia 两个数据集。自动配置并编译独立 perf/stats 构建；
-优先复用数据目录下唯一匹配 nlist 的 bare Triangle/P0 索引，缺少时才按 `--build-index` 新建。
-多个候选索引会报错，不擅自挑选。没有原始 base 时必须提供可加载的 Triangle 索引。
+默认使用 `active` 预置，运行 Fashion-MNIST、MillionSong、SIFT1M、GloVe25、
+StarLightCurves 和 DBpedia1536 holdout；NUS-WIDE、HandOutlines、SpaceV1B 和
+SIFT1B 不会被带入。纯小规模集合可用 `--preset small`，原 SIFT1M＋DBpedia 对照
+可用 `--preset reference`。脚本自动配置并编译独立 perf/stats 构建；
+优先复用当前格式、匹配 nlist 的 bare Triangle/P0 索引，缺少时才按 `--build-index` 新建。
+存在规范的 `v10/P0/seed0` 文件时优先使用；否则仅接受唯一的 v10/P0 候选，多个不明确
+候选会报错。没有原始 base 时必须提供可加载的 Triangle 索引。
 索引格式必须与当前代码兼容；**普通 Faiss `.index` 不可直接作为输入**。
 
 新索引、GT、抽样查询、PCA 字典、moments 和所有结果均在日志目录，原数据只读。
@@ -53,6 +57,34 @@ python3 scripts/run_mm_portable.py \
 |---|---:|---:|---|---:|---:|
 | sift1m | 1000 | 128 | 34、100 | 32 | 5 |
 | dbpedia1536m_holdout | 1000 | 256 | 160 | 20 | 1 |
+
+小规模预置如下。M 不含固定中心；每个数据集同时覆盖已采用的高召回点和一个更深
+的 list 扫描点。
+
+| 数据集 | nlist | Global字典方向M | nprobe | 测试query数 | 每轮完整批次数 |
+|---|---:|---:|---|---:|---:|
+| fasion_mnist_784 | 256 | 95 | 7、20 | 32 | 10 |
+| msong_holdout | 1000 | 95 | 16、50 | 32 | 5 |
+| sift1m | 1000 | 128 | 34、100 | 32 | 5 |
+| glove25 | 1024 | 25 | 50、100 | 32 | 10 |
+| StarLightCurves | 128 | 103 | 4、10 | 32 | 50 |
+| dbpedia1536m_holdout | 1000 | 256 | 160 | 20 | 1 |
+
+新服务器的一键入口：
+
+```bash
+scripts/run_mm_small_datasets.sh \
+  --data-root /data/benchmarks \
+  --dbpedia-root /data/dbpedia \
+  --log-dir /data/experiment-logs/mm-small-01 \
+  --cpus 0-31 --offline-threads 8 --build-jobs 8 \
+  --build-index
+```
+
+`--cpus` 同时约束编译、离线准备和实际测试。在线查询仍按本实验协议使用单线程；
+`--offline-threads` 只控制字典和签名等离线准备阶段。
+`--dbpedia-root` 可以指向包含 `dbpedia1536m_holdout` 的父目录，也可以直接指向
+该数据集目录；如果省略，则从 `--data-root/dbpedia1536m_holdout` 读取。
 
 共用 L2、top-k=1、float32、单查询线程、block=8、9轮随机交错，两种策略各预热一个完整批次。
 M 不含固定中心，native pivot 数为 M+1。方向上限相同，但实际 P 随 query/list/阶段变化。
