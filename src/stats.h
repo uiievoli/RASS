@@ -13,6 +13,7 @@
 
 #include "common.h"
 #include "utils.h"
+#include "QueryPlan.h"
 
 namespace tribase {
 
@@ -155,6 +156,10 @@ class Stats {
     // - other: coarse centroid search, triangle/microblock setup, sorting and loop overhead.
     // The three stages sum to search_worker_seconds (up to clock precision).
     double query_signature_seconds;
+    // Included in query_signature_seconds, not an additional wall-time stage.
+    double query_energy_selection_seconds;
+    std::vector<QueryPlanChoice> query_plan_choices;
+    std::vector<QueryDirectionOrder> query_direction_orders;
     double candidate_decision_seconds;
     double other_seconds;
     double search_worker_seconds;
@@ -165,6 +170,8 @@ class Stats {
     size_t progressive_stages = 0;
     size_t progressive_candidate_updates = 0;
     size_t progressive_query_dims = 0;
+    size_t progressive_workspace_growths = 0;
+    size_t progressive_workspace_bytes = 0;
     double progressive_predicted_pruned = 0;
     double progressive_control_seconds = 0;
     std::array<size_t, 513> active_pivot_histogram;
@@ -247,6 +254,9 @@ class Stats {
         microblock_pruned = 0;
         microblock_vectors_pruned = 0;
         query_signature_seconds = 0;
+        query_energy_selection_seconds = 0;
+        query_plan_choices.clear();
+        query_direction_orders.clear();
         candidate_decision_seconds = 0;
         other_seconds = 0;
         search_worker_seconds = 0;
@@ -255,6 +265,7 @@ class Stats {
         candidate_exact_seconds = 0;
         candidate_active_copy_seconds = 0;
         progressive_stages = progressive_candidate_updates = progressive_query_dims = 0;
+        progressive_workspace_growths = progressive_workspace_bytes = 0;
         progressive_predicted_pruned = progressive_control_seconds = 0;
         active_pivot_histogram.fill(0);
         nlist = 0;
@@ -428,6 +439,9 @@ inline Stats mergeStats(std::vector<Stats>& stats) {
         merged.microblock_pruned += s.microblock_pruned;
         merged.microblock_vectors_pruned += s.microblock_vectors_pruned;
         merged.query_signature_seconds += s.query_signature_seconds;
+        merged.query_energy_selection_seconds += s.query_energy_selection_seconds;
+        merged.query_plan_choices.insert(merged.query_plan_choices.end(),s.query_plan_choices.begin(),s.query_plan_choices.end());
+        merged.query_direction_orders.insert(merged.query_direction_orders.end(),s.query_direction_orders.begin(),s.query_direction_orders.end());
         merged.candidate_decision_seconds += s.candidate_decision_seconds;
         merged.candidate_projection_seconds += s.candidate_projection_seconds;
         merged.candidate_lb_seconds += s.candidate_lb_seconds;
@@ -436,6 +450,8 @@ inline Stats mergeStats(std::vector<Stats>& stats) {
         merged.progressive_stages += s.progressive_stages;
         merged.progressive_candidate_updates += s.progressive_candidate_updates;
         merged.progressive_query_dims += s.progressive_query_dims;
+        merged.progressive_workspace_growths += s.progressive_workspace_growths;
+        merged.progressive_workspace_bytes += s.progressive_workspace_bytes;
         merged.progressive_predicted_pruned += s.progressive_predicted_pruned;
         merged.progressive_control_seconds += s.progressive_control_seconds;
         for (size_t p = 0; p < merged.active_pivot_histogram.size(); ++p) {

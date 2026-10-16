@@ -98,7 +98,8 @@ TRIBASE_ALWAYS_INLINE uint8_t blockSignaturePruneMask8(
     size_t active_count,
     size_t block_size,
     float radius,
-    float precomputed_query_sqrt_rho = -1.0f) {
+    float precomputed_query_sqrt_rho = -1.0f,
+    const size_t* direction_order = nullptr) {
     if (active_count == 0) return 0;
     const size_t n = active_count - 1;
     if (n == 0) {
@@ -137,13 +138,14 @@ TRIBASE_ALWAYS_INLINE uint8_t blockSignaturePruneMask8(
     for (size_t begin = 0; begin < n; begin += block_size) {
         const size_t end = std::min(n, begin + block_size);
         for (size_t dim = begin; dim < end; ++dim) {
-            const __m256 qv = _mm256_set1_ps(z_query[dim]);
-            const __m256 xv = _mm256_loadu_ps(signature_soa + dim * candidate_count + base_index);
+            const size_t row = direction_order ? direction_order[dim] : dim;
+            const __m256 qv = _mm256_set1_ps(z_query[row]);
+            const __m256 xv = _mm256_loadu_ps(signature_soa + row * candidate_count + base_index);
             const __m256 delta = _mm256_sub_ps(qv, xv);
             score = _mm256_fmadd_ps(delta, delta, score);
             hx2 = _mm256_sub_ps(hx2, _mm256_mul_ps(xv, xv));
             if (!use_precomputed_query_residual) {
-                hq2 = std::max(0.0f, hq2 - z_query[dim] * z_query[dim]);
+                hq2 = std::max(0.0f, hq2 - z_query[row] * z_query[row]);
             }
         }
         const float hq_scalar = use_precomputed_query_residual
@@ -169,10 +171,11 @@ TRIBASE_ALWAYS_INLINE uint8_t blockSignaturePruneMask8(
         for (size_t begin = 0; begin < n; begin += block_size) {
             const size_t end = std::min(n, begin + block_size);
             for (size_t dim = begin; dim < end; ++dim) {
-                const float delta = z_query[dim] - signature_soa[dim * candidate_count + candidate];
+                const size_t row = direction_order ? direction_order[dim] : dim;
+                const float delta = z_query[row] - signature_soa[row * candidate_count + candidate];
                 score += delta * delta;
-                const float z = z_query[dim];
-                const float x = signature_soa[dim * candidate_count + candidate];
+                const float z = z_query[row];
+                const float x = signature_soa[row * candidate_count + candidate];
                 if (!use_precomputed_query_residual) {
                     hq2 = std::max(0.0f, hq2 - z * z);
                 }
@@ -201,7 +204,8 @@ TRIBASE_ALWAYS_INLINE bool blockSignaturePrunes(
     size_t active_count,
     size_t block_size,
     float radius,
-    float precomputed_query_sqrt_rho = -1.0f) {
+    float precomputed_query_sqrt_rho = -1.0f,
+    const size_t* direction_order = nullptr) {
     if (active_count == 0) return false;
     const size_t n = active_count - 1;
     if (n == 0) {
@@ -223,8 +227,9 @@ TRIBASE_ALWAYS_INLINE bool blockSignaturePrunes(
     for (size_t begin = 0; begin < n; begin += block_size) {
         const size_t end = std::min(n, begin + block_size);
         for (size_t dim = begin; dim < end; ++dim) {
-            const float q = z_query[dim];
-            const float x = signature_soa[dim * candidate_count + candidate_index];
+            const size_t row = direction_order ? direction_order[dim] : dim;
+            const float q = z_query[row];
+            const float x = signature_soa[row * candidate_count + candidate_index];
             const float delta = q - x;
             score += delta * delta;
             if (!use_precomputed_query_residual) {

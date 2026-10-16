@@ -4,16 +4,231 @@
 
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <random>
 #include <sstream>
 #include <vector>
+#include <omp.h>
 
 #include "gtest/gtest.h"
 
 namespace {
+
+std::vector<float> randomVectors(size_t count,size_t d,uint32_t seed);
+void expectSameResults(const std::vector<tribase::idx_t>& expected_ids,
+                       const std::vector<float>& expected_distances,
+                       const std::vector<tribase::idx_t>& actual_ids,
+                       const std::vector<float>& actual_distances);
+
+TEST(QueryEnergy, GlobalSelectedDirectionsPreserveExactTopK) {
+    using namespace tribase;
+    constexpr size_t nb=1025,nq=24,d=24,nlist=24;
+    auto base=randomVectors(nb,d,101);
+    auto queries=randomVectors(nq,d,202);
+    // Include exact database matches, where an incorrect residual can lose NN.
+    std::copy_n(base.data(),4*d,queries.data());
+    Index index(d,nlist,nlist,METRIC_L2,OPT_TRIANGLE,0,1,1,false);
+    index.configure_multipivot(MultiPivotScope::GLOBAL,"pca",17,0);
+    index.train(nb,base.data());index.add(nb,base.data());
+    for(size_t k:{size_t(1),size_t(10)}) {
+        std::vector<idx_t> expected(nq*k),actual(nq*k);
+        std::vector<float> ed(nq*k),ad(nq*k);
+        index.projection_query_energy=false;
+        index.set_multipivot_search(MultiPivotMode::NONE,0);
+        index.search(nq,queries.data(),k,ed.data(),expected.data());
+        for(OptLevel opt:{OPT_NONE,OPT_TRIANGLE})for(size_t p:{size_t(2),size_t(6),size_t(12),size_t(17)}) {
+            index.opt_level=opt;index.projection_query_energy=true;
+            index.set_multipivot_search(MultiPivotMode::PROJECTION,p);
+            auto stats=index.search(nq,queries.data(),k,ad.data(),actual.data());
+            expectSameResults(expected,ed,actual,ad);
+#ifdef TRIBASE_ENABLE_STATS
+            EXPECT_EQ(stats.multipivot_invalid,0u);
+            EXPECT_GT(stats.query_energy_selection_seconds,0.);
+            EXPECT_GE(stats.query_signature_seconds,stats.query_energy_selection_seconds);
+#endif
+        }
+        index.opt_level=OPT_TRIANGLE;
+    }
+    index.projection_dynamic=true;
+    std::vector<idx_t> ids(nq);std::vector<float> distances(nq);
+    EXPECT_THROW(index.search(nq,queries.data(),1,distances.data(),ids.data()),std::invalid_argument);
+    index.projection_dynamic=false;index.multipivot_scope=MultiPivotScope::PER_LIST;
+    EXPECT_THROW(index.search(nq,queries.data(),1,distances.data(),ids.data()),std::invalid_argument);
+}
+
+TEST(QueryEnergy, PersistedMomentsPreserveResultsAndRejectStaleData) {
+    using namespace tribase;
+    constexpr size_t nb=513,nq=20,d=20,nlist=16;
+    auto base=randomVectors(nb,d,404),queries=randomVectors(nq,d,405);
+    std::copy_n(base.data(),3*d,queries.data());
+    Index index(d,nlist,nlist,METRIC_L2,OPT_TRIANGLE,0,1,1,false);
+    index.configure_multipivot(MultiPivotScope::GLOBAL,"pca",13,0);
+    index.train(nb,base.data());index.add(nb,base.data());
+    index.build_projection_moments();
+    const auto means=index.projection_list_means,variances=index.projection_list_variances;
+    for(size_t lid=0;lid<nlist;++lid) {
+        const auto& list=index.lists[lid];const size_t n=list.list_size;if(!n)continue;
+        for(size_t dim=0;dim<12;++dim) {
+            double sum=0,second=0;
+            for(size_t i=0;i<n;++i){double z=list.pivots.signature_data[dim*n+i];sum+=z;second+=z*z;}
+            EXPECT_NEAR(means[lid*12+dim],sum/n,1e-12);
+            EXPECT_NEAR(variances[lid*12+dim],second/n-(sum/n)*(sum/n),1e-12);
+        }
+    }
+    const auto path=std::filesystem::temp_directory_path()/
+        ("tribase_projection_moments_"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+".bin");
+    index.save_projection_moments(path.string());
+    index.projection_list_means.clear();index.projection_list_variances.clear();index.projection_moment_dims=0;
+    index.load_projection_moments(path.string());
+    EXPECT_EQ(index.projection_list_means,means);EXPECT_EQ(index.projection_list_variances,variances);
+    for(size_t k:{size_t(1),size_t(5)}) {
+        std::vector<idx_t> expected(nq*k),actual(nq*k);std::vector<float> ed(nq*k),ad(nq*k);
+        index.projection_moment_score=0;index.set_multipivot_search(MultiPivotMode::NONE,0);
+        index.search(nq,queries.data(),k,ed.data(),expected.data());
+        for(int mode:{1,2})for(size_t p:{size_t(2),size_t(6),size_t(13)}) {
+            index.projection_moment_score=mode;index.set_multipivot_search(MultiPivotMode::PROJECTION,p);
+            auto stats=index.search(nq,queries.data(),k,ad.data(),actual.data());
+            expectSameResults(expected,ed,actual,ad);
+#ifdef TRIBASE_ENABLE_STATS
+            EXPECT_GT(stats.multipivot_checks,0u);EXPECT_EQ(stats.multipivot_invalid,0u);
+#endif
+        }
+    }
+    size_t changed_lid=0;while(changed_lid<nlist&&index.lists[changed_lid].list_size==0)++changed_lid;
+    ASSERT_LT(changed_lid,nlist);
+    float& value=index.lists[changed_lid].pivots.signature_data[0];const float original=value;value+=1;
+    EXPECT_THROW(index.load_projection_moments(path.string()),std::invalid_argument);value=original;
+    std::filesystem::resize_file(path,std::filesystem::file_size(path)-8);
+    EXPECT_THROW(index.load_projection_moments(path.string()),std::invalid_argument);
+    std::filesystem::remove(path);
+    index.projection_query_energy=true;
+    std::vector<idx_t> ids(nq);std::vector<float> distances(nq);
+    EXPECT_THROW(index.search(nq,queries.data(),1,distances.data(),ids.data()),std::invalid_argument);
+}
+
+TEST(QueryEnergy, ScanOrderAndUniformPrefixPreserveResultsAndSubsets) {
+    using namespace tribase;
+    constexpr size_t nb=513,nq=20,d=24,nlist=24;
+    auto base=randomVectors(nb,d,1007),queries=randomVectors(nq,d,1008);
+    std::copy_n(base.data(),3*d,queries.data());
+    Index index(d,nlist,nlist,METRIC_L2,OPT_TRIANGLE,0,1,1,false);
+    index.configure_multipivot(MultiPivotScope::GLOBAL,"pca",17,0);
+    index.train(nb,base.data());index.add(nb,base.data());index.build_projection_moments();
+    index.collect_projection_orders=true;
+    for(size_t k:{size_t(1),size_t(5)}) {
+        std::vector<idx_t> expected(nq*k),ids(nq*k);std::vector<float> ed(nq*k),dist(nq*k);
+        index.projection_query_energy=false;index.projection_moment_score=0;
+        index.projection_uniform_prefix=false;index.projection_scan_ascending=false;
+        index.set_multipivot_search(MultiPivotMode::NONE,0);
+        index.search(nq,queries.data(),k,ed.data(),expected.data());
+        for(size_t p:{size_t(5),size_t(13)}) {
+            index.set_multipivot_search(MultiPivotMode::PROJECTION,p+1);
+            index.projection_uniform_prefix=true;
+            auto uniform=index.search(nq,queries.data(),k,dist.data(),ids.data());
+            expectSameResults(expected,ed,ids,dist);
+#ifdef TRIBASE_ENABLE_STATS
+            ASSERT_EQ(uniform.query_direction_orders.size(),nq);
+            for(const auto& order:uniform.query_direction_orders){ASSERT_EQ(order.directions.size(),p);
+                for(size_t i=0;i<p;++i)EXPECT_EQ(order.directions[i],i);}
+#endif
+            index.projection_uniform_prefix=false;
+            for(int family:{0,2}) {
+                index.projection_query_energy=family==0;index.projection_moment_score=family;
+                index.projection_scan_ascending=false;
+                auto score=index.search(nq,queries.data(),k,dist.data(),ids.data());
+                expectSameResults(expected,ed,ids,dist);
+                index.projection_scan_ascending=true;
+                auto ascending=index.search(nq,queries.data(),k,dist.data(),ids.data());
+                expectSameResults(expected,ed,ids,dist);
+#ifdef TRIBASE_ENABLE_STATS
+                EXPECT_EQ(score.multipivot_invalid,0u);EXPECT_EQ(ascending.multipivot_invalid,0u);
+                ASSERT_EQ(score.query_direction_orders.size(),nq);ASSERT_EQ(ascending.query_direction_orders.size(),nq);
+                for(size_t q=0;q<nq;++q){auto selected=score.query_direction_orders[q].directions;
+                    std::sort(selected.begin(),selected.end());EXPECT_EQ(selected,ascending.query_direction_orders[q].directions);}
+#endif
+            }
+            index.projection_query_energy=false;index.projection_moment_score=0;index.projection_scan_ascending=false;
+        }
+    }
+    index.projection_uniform_prefix=true;index.projection_query_energy=true;
+    std::vector<idx_t> ids(nq);std::vector<float> dist(nq);
+    EXPECT_THROW(index.search(nq,queries.data(),1,dist.data(),ids.data()),std::invalid_argument);
+    index.projection_uniform_prefix=false;index.projection_query_energy=false;index.projection_scan_ascending=true;
+    EXPECT_THROW(index.search(nq,queries.data(),1,dist.data(),ids.data()),std::invalid_argument);
+}
+
+TEST(QueryEnergy, OriginalQuantityPredictorAndStagedMMRemainExact) {
+    using namespace tribase;
+    constexpr size_t nb=2049,nq=12,d=64,nlist=32;
+    auto base=randomVectors(nb,d,1207),queries=randomVectors(nq,d,1208);
+    std::copy_n(base.data(),6*d,queries.data());
+    Index index(d,nlist,nlist,METRIC_L2,OPT_TRIANGLE,0,1,1,false);
+    index.configure_multipivot(MultiPivotScope::GLOBAL,"pca",25,0);
+    index.train(nb,base.data());index.add(nb,base.data());index.build_projection_moments();
+    for(size_t k:{size_t(1),size_t(5)}) {
+        std::vector<idx_t> expected(nq*k),ids(nq*k);std::vector<float> ed(nq*k),dist(nq*k);
+        index.projection_mm_dynamic=false;index.projection_moment_score=0;index.projection_dynamic=false;
+        index.projection_progressive=0;index.projection_reuse_workspace=false;
+        index.set_multipivot_search(MultiPivotMode::NONE,0);index.search(nq,queries.data(),k,ed.data(),expected.data());
+        index.set_multipivot_search(MultiPivotMode::PROJECTION,25);
+        index.projection_mm_dynamic=true;index.projection_moment_score=2;index.projection_dynamic=true;
+        index.projection_block_size=8;index.projection_progressive_keep_exploration=true;
+        for(int mode:{0,1,2}) {
+            index.projection_progressive=mode;index.projection_reuse_workspace=false;
+            auto allocated=index.search(nq,queries.data(),k,dist.data(),ids.data());expectSameResults(expected,ed,ids,dist);
+            if(!mode)continue;
+            index.projection_reuse_workspace=true;
+            auto reused=index.search(nq,queries.data(),k,dist.data(),ids.data());expectSameResults(expected,ed,ids,dist);
+#ifdef TRIBASE_ENABLE_STATS
+            EXPECT_EQ(allocated.multipivot_invalid,0u);EXPECT_EQ(reused.multipivot_invalid,0u);
+            EXPECT_EQ(allocated.candidate_distance_computations,reused.candidate_distance_computations);
+            EXPECT_EQ(allocated.multipivot_pruned,reused.multipivot_pruned);
+            EXPECT_EQ(allocated.progressive_stages,reused.progressive_stages);
+            if(k==1)EXPECT_GT(reused.progressive_stages,0u);
+            EXPECT_EQ(allocated.progressive_candidate_updates,reused.progressive_candidate_updates);
+            EXPECT_EQ(allocated.active_pivot_histogram,reused.active_pivot_histogram);
+            EXPECT_EQ(reused.progressive_workspace_growths,4*std::min(nq,size_t(omp_get_max_threads())));
+#endif
+        }
+    }
+    index.projection_query_energy=true;
+    std::vector<idx_t> ids(nq);std::vector<float> dist(nq);
+    EXPECT_THROW(index.search(nq,queries.data(),1,dist.data(),ids.data()),std::invalid_argument);
+}
+
+TEST(QueryEnergy, AdaptiveZeroPartialAndCanonicalPlansRemainExact) {
+    using namespace tribase;
+    constexpr size_t nb=513,nq=20,d=24,nlist=24;
+    auto base=randomVectors(nb,d,907),queries=randomVectors(nq,d,908);
+    std::copy_n(base.data(),3*d,queries.data());
+    Index index(d,nlist,nlist,METRIC_L2,OPT_TRIANGLE,0,1,1,false);
+    index.configure_multipivot(MultiPivotScope::GLOBAL,"pca",17,0);
+    index.train(nb,base.data());index.add(nb,base.data());
+    std::vector<idx_t> expected(nq),ids(nq);std::vector<float> ed(nq),dist(nq);
+    index.set_multipivot_search(MultiPivotMode::NONE,0);index.search(nq,queries.data(),1,ed.data(),expected.data());
+    index.set_multipivot_search(MultiPivotMode::PROJECTION,17);
+    index.projection_query_energy=true;index.projection_query_adaptive=true;
+    auto& model=index.query_plan_model;model.d=d;model.m=16;model.nprobe=nlist;model.score_family=0;
+    model.scale.fill(1);model.coefficients.assign(QUERY_PLAN_FEATURES+1,0.);
+    for(QueryPlanAction action:std::vector<QueryPlanAction>{{0,false},{5,false},{16,true}}) {
+        model.actions={action};
+        auto stats=index.search(nq,queries.data(),1,dist.data(),ids.data());
+        expectSameResults(expected,ed,ids,dist);
+#ifdef TRIBASE_ENABLE_STATS
+        ASSERT_EQ(stats.query_plan_choices.size(),nq);EXPECT_EQ(stats.multipivot_invalid,0u);
+        for(const auto& choice:stats.query_plan_choices){EXPECT_EQ(choice.directions,action.directions);EXPECT_EQ(choice.canonical,action.canonical);}
+#endif
+    }
+    model.actions={{5,false},{16,true}};model.coefficients.assign(2*(QUERY_PLAN_FEATURES+1),0.);
+    model.coefficients[1]=1.;model.coefficients[QUERY_PLAN_FEATURES+2]=-1.;
+    QueryPlanFeatures low{},high{};low[0]=-1;high[0]=1;
+    EXPECT_EQ(model.choose(low).directions,5u);EXPECT_EQ(model.choose(high).directions,16u);
+    model.score_family=2;
+    EXPECT_THROW(index.search(nq,queries.data(),1,dist.data(),ids.data()),std::invalid_argument);
+}
 
 double squaredL2(const float* a, const float* b, size_t d) {
     double sum = 0.0;

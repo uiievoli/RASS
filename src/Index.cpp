@@ -94,6 +94,9 @@ void Index::configure_multipivot(MultiPivotScope scope,
         }
     }
     multipivot_scope = scope;
+    query_plan_model=QueryPlanModel{};
+    projection_moment_dims=0;
+    projection_list_means.clear();projection_list_variances.clear();
     multipivot_method = method;
     multipivot_built_count = pivot_count;
     multipivot_active_count = pivot_count;
@@ -104,6 +107,9 @@ void Index::configure_multipivot(MultiPivotScope scope,
 }
 
 void Index::rebuild_multipivot_metadata() {
+    query_plan_model=QueryPlanModel{};
+    projection_moment_dims=0;
+    projection_list_means.clear();projection_list_variances.clear();
     if (multipivot_built_count == 0) {
         global_pivots.clear();
         for (size_t list_id = 0; list_id < nlist; ++list_id) {
@@ -309,6 +315,111 @@ void Index::set_projection_prefix_length(size_t prefix_length) {
     }
 }
 
+namespace {
+// Non-cryptographic content binding: geometry, candidate IDs, and all persisted
+// float32 signatures. Calculated only during offline save/load, never in search.
+uint64_t projectionMomentChecksum(const Index& index) {
+    uint64_t hash=14695981039346656037ull;
+    auto mix=[&](uint64_t value){hash^=value;hash*=1099511628211ull;};
+    mix(index.d);mix(index.nlist);mix(index.global_pivots.count);
+    for(float v:index.global_pivots.codes)mix(std::bit_cast<uint32_t>(v));
+    for(float v:index.global_pivots.U)mix(std::bit_cast<uint32_t>(v));
+    for(size_t lid=0;lid<index.nlist;++lid) {
+        const auto& list=index.lists[lid];mix(list.list_size);
+        for(size_t i=0;i<list.list_size;++i)mix(list.get_candidate_id()[i]);
+        for(float v:list.pivots.signature_data)mix(std::bit_cast<uint32_t>(v));
+    }
+    return hash;
+}
+}
+
+void Index::build_projection_moments() {
+    if(multipivot_scope!=MultiPivotScope::GLOBAL||multipivot_method!="pca"||
+       signature_precision!=SignaturePrecision::FLOAT32||global_pivots.count<2)
+        throw std::invalid_argument("projection moments require global float32 PCA");
+    const size_t m=global_pivots.count-1;
+    // Validate before the parallel region so exceptions remain catchable.
+    for(size_t lid=0;lid<nlist;++lid) {
+        const auto& p=lists[lid].pivots;
+        if(p.signature_precision!=SignaturePrecision::FLOAT32||p.count!=m+1||
+           p.signature_data.size()!=(m+1)*lists[lid].list_size)
+            throw std::invalid_argument("projection moments require complete float32 signatures");
+    }
+    std::vector<double> means(nlist*m,0.),variances(nlist*m,0.);
+#pragma omp parallel for schedule(dynamic,1)
+    for(size_t lid=0;lid<nlist;++lid) {
+        const size_t n=lists[lid].list_size;if(!n)continue;
+        for(size_t dim=0;dim<m;++dim) {
+            const float* row=lists[lid].pivots.signature_data.data()+dim*n;
+            double sum=0;
+#pragma omp simd reduction(+:sum)
+            for(size_t i=0;i<n;++i)sum+=row[i];
+            const double mean=sum/n;double variance=0;
+#pragma omp simd reduction(+:variance)
+            for(size_t i=0;i<n;++i){double delta=double(row[i])-mean;variance+=delta*delta;}
+            means[lid*m+dim]=mean;variances[lid*m+dim]=variance/n;
+        }
+    }
+    projection_list_means=std::move(means);projection_list_variances=std::move(variances);
+    projection_moment_dims=m;
+}
+
+void Index::save_projection_moments(const std::string& path) const {
+    if(!projection_moment_dims||projection_list_means.size()!=nlist*projection_moment_dims||
+       projection_list_variances.size()!=projection_list_means.size())
+        throw std::invalid_argument("projection moments not built");
+    const std::filesystem::path destination(path),partial=path+".partial";
+    if(destination.has_parent_path())std::filesystem::create_directories(destination.parent_path());
+    std::ofstream out(partial,std::ios::binary);
+    const uint64_t header[]{1,0x01020304,d,nlist,projection_moment_dims,projectionMomentChecksum(*this)};
+    out.write("MOMSTAT1",8);out.write(reinterpret_cast<const char*>(header),sizeof(header));
+    out.write(reinterpret_cast<const char*>(projection_list_means.data()),projection_list_means.size()*sizeof(double));
+    out.write(reinterpret_cast<const char*>(projection_list_variances.data()),projection_list_variances.size()*sizeof(double));
+    out.close();if(!out)throw std::runtime_error("cannot save projection moments");
+    std::filesystem::rename(partial,destination);
+}
+
+void Index::load_projection_moments(const std::string& path) {
+    std::ifstream in(path,std::ios::binary);char magic[8];uint64_t header[6]{};
+    in.read(magic,8);in.read(reinterpret_cast<char*>(header),sizeof(header));
+    if(!in||std::string(magic,8)!="MOMSTAT1"||header[0]!=1||header[1]!=0x01020304||
+       header[2]!=d||header[3]!=nlist||header[4]+1!=global_pivots.count||
+       multipivot_scope!=MultiPivotScope::GLOBAL||signature_precision!=SignaturePrecision::FLOAT32)
+        throw std::invalid_argument("projection moments header/index mismatch");
+    const size_t m=header[4],count=nlist*m;
+    if(std::filesystem::file_size(path)!=8+sizeof(header)+2*count*sizeof(double)||
+       header[5]!=projectionMomentChecksum(*this))
+        throw std::invalid_argument("projection moments content/index mismatch");
+    std::vector<double> means(count),variances(count);
+    in.read(reinterpret_cast<char*>(means.data()),count*sizeof(double));
+    in.read(reinterpret_cast<char*>(variances.data()),count*sizeof(double));
+    if(!in)throw std::runtime_error("truncated projection moments");
+    for(size_t i=0;i<count;++i)if(!std::isfinite(means[i])||!std::isfinite(variances[i])||variances[i]<0)
+        throw std::invalid_argument("invalid projection moment values");
+    projection_moment_dims=m;projection_list_means=std::move(means);projection_list_variances=std::move(variances);
+}
+
+void Index::load_query_plan_model(const std::string& path) {
+    std::ifstream input(path,std::ios::binary);char magic[8];uint64_t h[9]{};
+    input.read(magic,8);input.read(reinterpret_cast<char*>(h),sizeof(h));
+    if(!input||std::string(magic,8)!="QPLAN001"||h[0]!=1||h[1]!=d||h[2]+1!=global_pivots.count||
+       h[3]!=nlist||!h[4]||h[4]>nlist||(h[5]!=0&&h[5]!=2)||h[6]!=QUERY_PLAN_FEATURES||!h[7]||h[7]>32||
+       h[8]!=projectionMomentChecksum(*this))throw std::invalid_argument("query plan model/index mismatch");
+    QueryPlanModel model;model.d=d;model.m=h[2];model.nprobe=h[4];model.score_family=h[5];
+    input.read(reinterpret_cast<char*>(model.mean.data()),sizeof(model.mean));
+    input.read(reinterpret_cast<char*>(model.scale.data()),sizeof(model.scale));
+    for(size_t i=0;i<h[7];++i){uint64_t a[2]{};input.read(reinterpret_cast<char*>(a),sizeof(a));
+        if(a[0]>model.m||a[1]>1||(a[1]&&a[0]!=model.m))throw std::invalid_argument("invalid plan action");
+        model.actions.push_back({size_t(a[0]),bool(a[1])});}
+    model.coefficients.resize(h[7]*(QUERY_PLAN_FEATURES+1));
+    input.read(reinterpret_cast<char*>(model.coefficients.data()),model.coefficients.size()*sizeof(double));
+    if(!input||input.peek()!=std::char_traits<char>::eof())throw std::invalid_argument("invalid plan model length");
+    for(size_t i=0;i<QUERY_PLAN_FEATURES;++i)if(!std::isfinite(model.mean[i])||!std::isfinite(model.scale[i])||model.scale[i]<=0)
+        throw std::invalid_argument("invalid plan feature scaling");
+    for(double v:model.coefficients)if(!std::isfinite(v))throw std::invalid_argument("invalid plan coefficients");
+    query_plan_model=std::move(model);
+}
+
 void Index::rebuild_microblocks() {
     microblock_build_seconds = 0;
     if (!lists) return;
@@ -388,6 +499,18 @@ Index& Index::operator=(Index&& other) noexcept {
     multipivot_method = std::move(other.multipivot_method);
     multipivot_built_count = other.multipivot_built_count;
     multipivot_active_count = other.multipivot_active_count;
+    projection_query_energy = other.projection_query_energy;
+    projection_query_adaptive=other.projection_query_adaptive;
+    query_plan_model=std::move(other.query_plan_model);
+    projection_moment_score=other.projection_moment_score;
+    projection_scan_ascending=other.projection_scan_ascending;
+    projection_uniform_prefix=other.projection_uniform_prefix;
+    collect_projection_orders=other.collect_projection_orders;
+    projection_mm_dynamic=other.projection_mm_dynamic;
+    projection_reuse_workspace=other.projection_reuse_workspace;
+    projection_moment_dims=other.projection_moment_dims;
+    projection_list_means=std::move(other.projection_list_means);
+    projection_list_variances=std::move(other.projection_list_variances);
     multipivot_seed = other.multipivot_seed;
     irls_max_iter = other.irls_max_iter;
     irls_residual_floor = other.irls_residual_floor;
@@ -1346,6 +1469,11 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
     std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe, edge_device_enabled);
     std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k, edge_device_enabled);
     scaner->progressive_mode = projection_progressive;
+    scaner->progressive_reuse_workspace=projection_reuse_workspace;
+    if(projection_reuse_workspace) {
+        size_t maximum_list=0;for(size_t lid=0;lid<nlist;++lid)maximum_list=std::max(maximum_list,lists[lid].list_size);
+        scaner->prepare_progressive_workspace(maximum_list,stats);
+    }
 
     std::unique_ptr<float[]> centroid2queries = std::make_unique<float[]>(n * nprobe);
     std::unique_ptr<idx_t[]> listidqueries = std::make_unique<idx_t[]>(n * nprobe);
@@ -1379,6 +1507,8 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
         bool global_full_query_signature_ready = false;
         size_t global_projection_ready_dims = 0;
         size_t global_active_pivots = 0;
+        std::array<size_t, MULTIPIVOT_MAX_PIVOTS> global_direction_order{};
+        scaner->projection_order = nullptr;
         if (metric == MetricType::METRIC_L2 && multipivot_mode != MultiPivotMode::NONE &&
             multipivot_scope == MultiPivotScope::GLOBAL) {
             if (global_pivots.count >= multipivot_active_count &&
@@ -1390,7 +1520,72 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
 #endif
             const bool use_U = multipivot_mode == MultiPivotMode::PROJECTION &&
                                global_pivots.has_U(global_active_pivots);
-            if (use_U && projection_dynamic && projection_block_size != 0 &&
+            if (use_U && (projection_query_energy || projection_moment_score || projection_uniform_prefix)) {
+                global_query_signature_ready = computePcaQuerySignature(
+                    queries+i*d,d,global_pivots,global_pivots.count,
+                    global_query_pivot_squared.data(),global_query_signature_z.data(),
+                    &global_query_sqrt_rho,query_centered.data());
+                global_full_query_signature_ready = global_query_signature_ready;
+                const size_t bank_dims = global_pivots.count-1;
+                size_t selected_dims = global_active_pivots-1;
+                const float full_query_sqrt_rho=global_query_sqrt_rho;
+                std::iota(global_direction_order.begin(),global_direction_order.begin()+bank_dims,0);
+#ifdef TRIBASE_ENABLE_STATS
+                const auto selection_start = std::chrono::steady_clock::now();
+#endif
+                std::array<double,MULTIPIVOT_MAX_PIVOTS> direction_scores{};
+                if(projection_moment_score) {
+                    // One query-global order: pool list distributions by list size.
+                    // The common normalization factor is irrelevant to ranking.
+                    for(size_t probe=0;probe<nprobe;++probe) {
+                        const size_t lid=listids[probe];const double weight=lists[lid].list_size;
+                        const double* mean=projection_list_means.data()+lid*bank_dims;
+                        const double* variance=projection_list_variances.data()+lid*bank_dims;
+                        for(size_t dim=0;dim<bank_dims;++dim) {
+                            const double delta=double(global_query_signature_z[dim])-mean[dim];
+                            direction_scores[dim]+=weight*(delta*delta+(projection_moment_score==1?variance[dim]:0.));
+                        }
+                    }
+                } else if(!projection_uniform_prefix)for(size_t dim=0;dim<bank_dims;++dim) {
+                    const float z=global_query_signature_z[dim];direction_scores[dim]=z*z;
+                }
+                if(!projection_uniform_prefix)std::partial_sort(global_direction_order.begin(),global_direction_order.begin()+selected_dims,
+                                  global_direction_order.begin()+bank_dims,[&](size_t a,size_t b) {
+                    const double ea=direction_scores[a],eb=direction_scores[b];
+                    return ea>eb || (ea==eb && a<b);
+                });
+                bool canonical_plan=false;
+                if(projection_query_adaptive) {
+                    const auto features=makeQueryPlanFeatures(float(global_query_pivot_squared[0]),global_query_signature_z.data(),
+                        bank_dims,global_direction_order.data(),centroids2query,nprobe,d,
+                        [&](size_t probe){return lists[listids[probe]].list_size;});
+                    auto choice=query_plan_model.choose(features);choice.query_id=stats?stats->query_offset+i:i;
+                    selected_dims=choice.directions;canonical_plan=choice.canonical;
+                    global_active_pivots=selected_dims?selected_dims+1:0;
+                    IF_STATS {stats->query_plan_choices.push_back(choice);}
+                }
+                float remaining=static_cast<float>(global_query_pivot_squared[0]);
+                for(size_t s=0;s<selected_dims;++s) {
+                    const float z=global_query_signature_z[global_direction_order[s]];
+                    remaining=std::max(0.0f,remaining-z*z);
+                }
+                global_query_sqrt_rho=std::sqrt(remaining);
+                // Keep query residual arithmetic identical for both scan orders.
+                // Only candidate-row access order changes in this ablation.
+                if(projection_scan_ascending)std::sort(global_direction_order.begin(),global_direction_order.begin()+selected_dims);
+                IF_STATS {
+                    if(collect_projection_orders&&stats)stats->query_direction_orders.push_back(
+                        {stats->query_offset+i,std::vector<size_t>(global_direction_order.begin(),global_direction_order.begin()+selected_dims)});
+                }
+                global_projection_ready_dims=bank_dims;
+                scaner->projection_order=global_direction_order.data();
+                if(canonical_plan){scaner->projection_order=nullptr;global_query_sqrt_rho=full_query_sqrt_rho;}
+                if(projection_query_adaptive&&!selected_dims)scaner->projection_order=nullptr;
+#ifdef TRIBASE_ENABLE_STATS
+                if(stats)stats->query_energy_selection_seconds+=std::chrono::duration<double>(
+                    std::chrono::steady_clock::now()-selection_start).count();
+#endif
+            } else if (use_U && projection_dynamic && projection_block_size != 0 &&
                 global_active_pivots > 1) {
                 // Dynamic stage-major mode only needs the center radius initially.
                 // Projection coordinates are materialized by IVFScan one block at a
@@ -1436,6 +1631,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
         if (metric == MetricType::METRIC_L2) {
             bool previous_dynamic_observation_valid = false;
             double best_log_survival_per_dimension = 0.0;
+            size_t mm_observed_dims=0;
             for (size_t j = 0; j < nprobe; j++) {
                 IVF& list = lists[listids[j]];
                 float centroid2query = centroids2query[j];
@@ -1530,7 +1726,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                 size_t dynamic_pivot_budget = multipivot_active_count;
                 bool dynamic_exploration_forced = false;
                 if (projection_dynamic && projection_block_size != 0 &&
-                    (projection_progressive == 0 || projection_progressive_keep_exploration ||
+                    (projection_mm_dynamic || projection_progressive == 0 || projection_progressive_keep_exploration ||
                      !previous_dynamic_observation_valid) &&
                     multipivot_mode == MultiPivotMode::PROJECTION) {
                     const size_t max_pivots = multipivot_scope == MultiPivotScope::GLOBAL
@@ -1611,10 +1807,13 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                                     ? exploration_max_dims
                                     : exploration_dims * exploration_growth_factor);
                         }
+                        // MM already materialized the bank. Track actual observed
+                        // filter depth separately from query-projection readiness.
+                        const size_t explored_dims=projection_mm_dynamic?mm_observed_dims:global_projection_ready_dims;
                         const bool exploration_incomplete =
-                            j == 0 || global_projection_ready_dims < exploration_max_dims;
+                            j == 0 || explored_dims < exploration_max_dims;
                         if (exploration_incomplete &&
-                            exploration_dims > global_projection_ready_dims) {
+                            exploration_dims > explored_dims) {
                             dynamic_pivot_budget = exploration_dims + 1;
                             dynamic_exploration_forced = true;
                         } else if (!previous_dynamic_observation_valid) {
@@ -1636,7 +1835,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                         dynamic_exploration_forced = true;
                     }
                     if (dynamic_pivot_budget > max_pivots &&
-                        (projection_progressive == 0 || !previous_dynamic_observation_valid)) {
+                        (projection_mm_dynamic || projection_progressive == 0 || !previous_dynamic_observation_valid)) {
                         const double D = static_cast<double>(d);
                         const double R = static_cast<double>(survivors);
                         // One residual sqrt/check costs about six coordinate updates
@@ -1700,7 +1899,10 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                 scaner->progressive_mode = progressive_calibration ? 0 : projection_progressive;
                 scaner->progressive_seed_dims = 0;
                 scaner->last_progressive_dims = 0;
-                if (projection_progressive && !progressive_calibration)
+                // The original predictor remains the entry gate for staged MM.
+                // Positive decisions can then be refined within the list.
+                if (projection_progressive && !progressive_calibration &&
+                    !(projection_mm_dynamic&&dynamic_pivot_budget==0))
                     dynamic_pivot_budget = multipivot_active_count;
                 std::array<double, MULTIPIVOT_MAX_PIVOTS> per_list_query_pivot_squared{};
                 std::array<float, MULTIPIVOT_MAX_PIVOTS> per_list_query_signature_z{};
@@ -1714,6 +1916,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                 bool query_signature_ready = false;
                 size_t active_pivots = 0;
                 MultiPivotMode scan_multipivot_mode = multipivot_mode;
+                if(projection_query_adaptive&&!global_active_pivots)scan_multipivot_mode=MultiPivotMode::NONE;
                 const size_t configured_full_pivots =
                     multipivot_scope == MultiPivotScope::GLOBAL
                         ? global_active_pivots
@@ -1949,6 +2152,7 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                         active_pivots = scaner->last_progressive_dims ? scaner->last_progressive_dims + 1 : 0;
                     IF_STATS { stats->active_pivot_histogram[active_pivots]++; }
                 }
+                if(projection_mm_dynamic&&active_pivots>1)mm_observed_dims=std::max(mm_observed_dims,active_pivots-1);
                 if (projection_dynamic && scaner->last_multipivot_checks != 0) {
                     const double observed_prune_rate =
                         static_cast<double>(scaner->last_multipivot_pruned) /
@@ -2127,6 +2331,30 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     if (n == 0) {
         return Stats();
     }
+    if ((projection_query_energy || projection_moment_score || projection_uniform_prefix) && (metric!=MetricType::METRIC_L2 ||
+        multipivot_scope!=MultiPivotScope::GLOBAL || multipivot_method!="pca" ||
+        multipivot_mode!=MultiPivotMode::PROJECTION || multipivot_active_count<2 ||
+        signature_precision!=SignaturePrecision::FLOAT32 || (projection_dynamic&&!projection_mm_dynamic) ||
+        (projection_progressive&&!projection_mm_dynamic) || projection_prefix_length || microblock_enabled ||
+        (opt_level & (OptLevel::OPT_SUBNN_L2 | OptLevel::OPT_SUBNN_IP)) ||
+        !global_pivots.has_U(multipivot_built_count)))
+        throw std::invalid_argument("query-energy requires global float32 PCA projection, P>=2, no dynamic/progressive/prefix/microblocks/subnn");
+    if(projection_mm_dynamic&&(!projection_dynamic||!projection_block_size||projection_moment_score!=2||projection_query_energy||
+       projection_query_adaptive||projection_uniform_prefix||projection_scan_ascending||projection_progressive<0||projection_progressive>2||
+       multipivot_active_count!=global_pivots.count))throw std::invalid_argument("MM dynamic requires full-cap Global MM, original list predictor and block size");
+    if(projection_reuse_workspace&&(!projection_dynamic||!projection_progressive))throw std::invalid_argument("workspace reuse requires staged dynamic mode");
+    if((projection_uniform_prefix&&(projection_query_energy||projection_moment_score||projection_query_adaptive))||
+       (projection_scan_ascending&&(!(projection_query_energy||projection_moment_score)||projection_query_adaptive)))
+        throw std::invalid_argument("scan-order ablation requires fixed-budget scoring or uniform prefix, not adaptive");
+    if(projection_moment_score && (projection_query_energy||projection_moment_score<1||projection_moment_score>2||
+       projection_moment_dims!=global_pivots.count-1||projection_list_means.size()!=nlist*projection_moment_dims||
+       projection_list_variances.size()!=projection_list_means.size()))
+        throw std::invalid_argument("moment selection requires loaded matching statistics, score=1/2, and query-energy off");
+    if(projection_query_adaptive&&(!(projection_query_energy||projection_moment_score)||
+       query_plan_model.actions.empty()||query_plan_model.nprobe!=nprobe||query_plan_model.d!=d||
+       query_plan_model.m+1!=global_pivots.count||multipivot_active_count!=global_pivots.count||
+       query_plan_model.score_family!=(projection_query_energy?0:projection_moment_score)))
+        throw std::invalid_argument("adaptive query plan requires a matching model and full dictionary cap");
     if ((opt_level & added_opt_level) != opt_level) {
         std::cerr << "opt_level: " << opt_level << " added_opt_level: " << added_opt_level << std::endl;
         throw std::runtime_error("opt_level is not subset of added_opt_level");
@@ -2271,6 +2499,9 @@ void Index::load_legacy_index(std::string path) {
 }
 
 void Index::load_index(std::string path) {
+    query_plan_model=QueryPlanModel{};
+    projection_moment_dims=0;
+    projection_list_means.clear();projection_list_variances.clear();
     std::ifstream in(path, std::ios::binary);
     if (!in.is_open()) {
         throw std::runtime_error("Cannot open file " + path);

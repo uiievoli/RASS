@@ -33,6 +33,22 @@ class IVFScanBase {
     size_t progressive_seed_dims = 0;
     const PivotMetadata* progressive_geometry = nullptr;
     size_t last_progressive_dims = 0;
+    const size_t* projection_order = nullptr;
+    bool progressive_reuse_workspace = false;
+    std::vector<uint32_t> workspace_active;
+    std::vector<float> workspace_scores, workspace_energies;
+    std::vector<uint8_t> workspace_pruned;
+
+    template<class T> void reserve_progressive(std::vector<T>& values,size_t count,Stats* stats) {
+        if(values.capacity()>=count)return;
+        IF_STATS {if(stats){++stats->progressive_workspace_growths;
+            stats->progressive_workspace_bytes+=(count-values.capacity())*sizeof(T);}}
+        values.reserve(count);
+    }
+    void prepare_progressive_workspace(size_t count,Stats* stats) {
+        reserve_progressive(workspace_active,count,stats);reserve_progressive(workspace_scores,count,stats);
+        reserve_progressive(workspace_energies,count,stats);reserve_progressive(workspace_pruned,count,stats);
+    }
 
     IVFScanBase(size_t d, size_t k)
         : d(d), k(k) {}
@@ -341,7 +357,8 @@ class IVFScan : public IVFScanBase {
                 // A PCA index built at Pmax stores the full residual only in its
                 // final SoA row.  For a smaller active prefix, reconstruct the
                 // residual from ||x-c||^2 and the selected z coordinates.
-                const bool active_prefix = active_pivot_count < pivot_metadata->count;
+                const bool active_prefix = active_pivot_count < pivot_metadata->count ||
+                                           projection_order != nullptr;
                 const size_t active_prefix_block = active_pivot_count > 1
                     ? active_pivot_count - 1 : 0;
 
@@ -401,10 +418,17 @@ class IVFScan : public IVFScanBase {
                             return;
                         }
                     }
-                    std::vector<uint32_t> active;
-                    std::vector<float> scores, energies;
-                    std::vector<uint8_t> pruned;
-                    active.reserve(scan_end - scan_begin);
+                    std::vector<uint32_t> local_active;
+                    std::vector<float> local_scores,local_energies;
+                    std::vector<uint8_t> local_pruned;
+                    auto& active=progressive_reuse_workspace?workspace_active:local_active;
+                    auto& scores=progressive_reuse_workspace?workspace_scores:local_scores;
+                    auto& energies=progressive_reuse_workspace?workspace_energies:local_energies;
+                    auto& pruned=progressive_reuse_workspace?workspace_pruned:local_pruned;
+                    active.clear();scores.clear();energies.clear();pruned.clear();
+                    const size_t capacity=scan_end-scan_begin;
+                    reserve_progressive(active,capacity,stats);reserve_progressive(scores,capacity,stats);
+                    reserve_progressive(energies,capacity,stats);reserve_progressive(pruned,capacity,stats);
                     for (size_t ci = scan_begin; ci < scan_end; ++ci) {
                         if (if_skip && if_skip[ci]) continue;
                         // Seed an initially infinite heap before predicting any gain.
@@ -413,7 +437,6 @@ class IVFScan : public IVFScanBase {
                     }
                     scores.assign(active.size(), 0.0f);
                     energies.resize(active.size());
-                    pruned.reserve(active.size());
                     for (size_t pos = 0; pos < active.size(); ++pos)
                         energies[pos] = pivot_metadata->candidate_centroid_squared[active[pos]];
 #ifdef TRIBASE_ENABLE_STATS
@@ -473,16 +496,19 @@ class IVFScan : public IVFScanBase {
                         tick = std::chrono::steady_clock::now();
 #endif
                         for (size_t dim = ready; dim < next; ++dim) {
+                            const size_t row=projection_order?projection_order[dim]:dim;
                             float z = 0.0f;
                             const float* center = progressive_geometry->codes.data();
 #pragma omp simd reduction(+ : z)
                             for (size_t axis = 0; axis < d; ++axis)
-                                z += (query[axis] - center[axis]) * progressive_geometry->U[dim * d + axis];
-                            query_signature_z[dim] = z;
+                                z += (query[axis] - center[axis]) * progressive_geometry->U[row * d + axis];
+                            query_signature_z[row] = z;
                         }
                         if (projection_ready_dims) *projection_ready_dims = std::max(ready, next);
-                        for (size_t dim = rank; dim < next; ++dim)
-                            hq2 = std::max(0.0f, hq2 - query_signature_z[dim] * query_signature_z[dim]);
+                        for (size_t dim = rank; dim < next; ++dim) {
+                            const size_t row=projection_order?projection_order[dim]:dim;
+                            hq2 = std::max(0.0f, hq2 - query_signature_z[row] * query_signature_z[row]);
+                        }
                         const float hq = std::sqrt(hq2);
 #ifdef TRIBASE_ENABLE_STATS
                         if (stats) stats->candidate_projection_seconds +=
@@ -490,13 +516,14 @@ class IVFScan : public IVFScanBase {
                         tick = std::chrono::steady_clock::now();
 #endif
                         for (size_t dim = rank; dim < next; ++dim) {
-                            const float qz = query_signature_z[dim];
+                            const size_t row=projection_order?projection_order[dim]:dim;
+                            const float qz = query_signature_z[row];
                             size_t pos = 0;
 #if defined(__AVX2__)
                             for (; pos + 8 <= active.size(); pos += 8) {
                                 const __m256i indexes = _mm256_loadu_si256(
                                     reinterpret_cast<const __m256i*>(active.data() + pos));
-                                const __m256 xz = _mm256_i32gather_ps(signature_soa + dim * signature_count, indexes, 4);
+                                const __m256 xz = _mm256_i32gather_ps(signature_soa + row * signature_count, indexes, 4);
                                 const __m256 delta = _mm256_sub_ps(_mm256_set1_ps(qz), xz);
                                 _mm256_storeu_ps(scores.data() + pos, _mm256_fmadd_ps(delta, delta,
                                     _mm256_loadu_ps(scores.data() + pos)));
@@ -505,7 +532,7 @@ class IVFScan : public IVFScanBase {
                             }
 #endif
                             for (; pos < active.size(); ++pos) {
-                                const float xz = signature_soa[dim * signature_count + active[pos]];
+                                const float xz = signature_soa[row * signature_count + active[pos]];
                                 const float delta = qz - xz;
                                 scores[pos] += delta * delta;
                                 energies[pos] = std::max(0.0f, energies[pos] - xz * xz);
@@ -583,16 +610,17 @@ class IVFScan : public IVFScanBase {
                     const auto projection_start = std::chrono::steady_clock::now();
 #endif
                     for (size_t dim = 0; dim < projected_dims; ++dim) {
-                        float qz = query_signature_z[dim];
+                        const size_t row=projection_order?projection_order[dim]:dim;
+                        float qz = query_signature_z[row];
                         if (projection_ready_dims == nullptr || dim >= *projection_ready_dims) {
                             qz = 0.0f;
                             const float* center = pivot_metadata->codes.data();
 #pragma omp simd reduction(+ : qz)
                             for (size_t axis = 0; axis < d; ++axis) {
                                 qz += (query[axis] - center[axis]) *
-                                        pivot_metadata->U[dim * d + axis];
+                                        pivot_metadata->U[row * d + axis];
                             }
-                            query_signature_z[dim] = qz;
+                            query_signature_z[row] = qz;
                         }
                     }
                     if (projection_ready_dims != nullptr) {
@@ -604,10 +632,11 @@ class IVFScan : public IVFScanBase {
                     float dynamic_query_residual_squared =
                         static_cast<float>(query_pivot_squared[0]);
                     for (size_t dim = 0; dim < projected_dims; ++dim) {
+                        const size_t row=projection_order?projection_order[dim]:dim;
                         dynamic_query_residual_squared = std::max(
                             0.0f,
                             dynamic_query_residual_squared -
-                                query_signature_z[dim] * query_signature_z[dim]);
+                                query_signature_z[row] * query_signature_z[row]);
                     }
                     const float dynamic_query_sqrt_rho =
                         std::sqrt(dynamic_query_residual_squared);
@@ -641,7 +670,7 @@ class IVFScan : public IVFScanBase {
                                 signature_soa,
                                 pivot_metadata->candidate_centroid_squared.data(),
                                 base, signature_count, active_pivot_count,
-                                projected_dims, simi[0], dynamic_query_sqrt_rho) & eligible);
+                                projected_dims, simi[0], dynamic_query_sqrt_rho, projection_order) & eligible);
                         last_multipivot_checks += std::popcount(eligible);
                         last_multipivot_pruned += std::popcount(pruned);
                         uint8_t survivors = static_cast<uint8_t>(eligible & ~pruned);
@@ -665,7 +694,7 @@ class IVFScan : public IVFScanBase {
                                 signature_soa,
                                 pivot_metadata->candidate_centroid_squared.data(),
                                 base, signature_count, active_pivot_count,
-                                projected_dims, simi[0], dynamic_query_sqrt_rho)) {
+                                projected_dims, simi[0], dynamic_query_sqrt_rho, projection_order)) {
                             ++last_multipivot_pruned;
                             IF_STATS { stats->multipivot_pruned++; }
                             continue;
@@ -712,7 +741,8 @@ class IVFScan : public IVFScanBase {
                               signature_soa,
                               pivot_metadata->candidate_centroid_squared.data(),
                               base, signature_count, active_pivot_count,
-                              active_prefix ? active_prefix_block : projection_block_size, simi[0])
+                              active_prefix ? active_prefix_block : projection_block_size, simi[0],
+                              projection_order ? query_sqrt_rho : -1.0f, projection_order)
                         : staged_projection_ok
                         ? stagedSignaturePruneMask8(
                               query_signature_z, query_sqrt_rho, query_prefix_sqrt_rho,
@@ -774,7 +804,8 @@ class IVFScan : public IVFScanBase {
                               pivot_metadata->signature_data.data(),
                               pivot_metadata->candidate_centroid_squared.data(),
                               base, pivot_metadata->signature_candidate_count, active_pivot_count,
-                              active_prefix ? active_prefix_block : projection_block_size, simi[0])
+                              active_prefix ? active_prefix_block : projection_block_size, simi[0],
+                              projection_order ? query_sqrt_rho : -1.0f, projection_order)
                         : staged_projection_ok
                         ? stagedSignaturePrunes(
                               query_signature_z, query_sqrt_rho, query_prefix_sqrt_rho,

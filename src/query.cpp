@@ -204,6 +204,15 @@ int main(int argc, char* argv[]) {
     program.add_argument("--projection_progressive_keep_exploration")
         .default_value(false).implicit_value(true)
         .help("preserve original cross-list exploration before progressive cost decisions");
+    program.add_argument("--projection_query_energy")
+        .default_value(false).implicit_value(true)
+        .help("global float32 PCA: select active directions by query projection energy");
+    program.add_argument("--projection_moment_score").default_value(std::string("none"))
+        .help("global PCA moment selector: none, separation (mean+variance), mean_only");
+    program.add_argument("--projection_moments_path").default_value(std::string(""))
+        .help("offline projection-moments sidecar matching the loaded index");
+    program.add_argument("--projection_query_adaptive_model").default_value(std::string(""))
+        .help("offline calibrated query-arrival plan model; requires matching energy/moment selector");
     program.add_argument("--dump_search_results")
         .default_value(std::string(""))
         .help("export final query IDs/distances to CSV after the timed search");
@@ -901,6 +910,15 @@ int main(int argc, char* argv[]) {
         index.set_projection_prefix_length(projection_prefix_length);
         index.projection_block_size = projection_block_size;
         index.projection_dynamic = projection_dynamic || progressive_mode != 0;
+        index.projection_query_energy = program.get<bool>("projection_query_energy");
+        const auto moment_score=program.get<std::string>("projection_moment_score");
+        if(moment_score!="none"&&moment_score!="separation"&&moment_score!="mean_only")
+            throw std::invalid_argument("--projection_moment_score must be none, separation, or mean_only");
+        index.projection_moment_score=moment_score=="separation"?1:moment_score=="mean_only"?2:0;
+        if(index.projection_moment_score)index.load_projection_moments(program.get<std::string>("projection_moments_path"));
+        const auto plan_path=program.get<std::string>("projection_query_adaptive_model");
+        index.projection_query_adaptive=!plan_path.empty();
+        if(index.projection_query_adaptive)index.load_query_plan_model(plan_path);
         index.projection_progressive = progressive_mode;
         index.projection_progressive_keep_exploration =
             program.get<bool>("projection_progressive_keep_exploration");

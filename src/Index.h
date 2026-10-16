@@ -8,6 +8,7 @@
 #include "IVF.h"
 #include "IVFScan.hpp"
 #include "common.h"
+#include "QueryPlan.h"
 
 namespace tribase {
 
@@ -84,6 +85,11 @@ class Index {
                               GreedyPruneConfig greedy_config = {});
     // Build/rebuild pivot metadata on an already-loaded IVF (no retrain/re-add).
     void rebuild_multipivot_metadata();
+    // Offline global projection statistics, persisted separately from the index.
+    void build_projection_moments();
+    void save_projection_moments(const std::string& path) const;
+    void load_projection_moments(const std::string& path);
+    void load_query_plan_model(const std::string& path);
     void apply_signature_precision();
     void set_projection_prefix_length(size_t prefix_length);
     void rebuild_microblocks();
@@ -160,6 +166,22 @@ class Index {
     // Optional fixed-size progressive PCA blocks; 0 keeps the legacy full scan.
     size_t projection_block_size = 0;
     bool projection_dynamic = false;
+    // Global float32 PCA: full-bank projection and top-P energy selection once/query.
+    bool projection_query_energy = false;
+    // 0=off, 1=expected squared separation (mean+variance), 2=mean-only ablation.
+    int projection_moment_score = 0;
+    // Scan-order ablation: choose by score, then optionally visit selected IDs ascending.
+    bool projection_scan_ascending = false;
+    // Canonical prefix through the same full-query-projection/indirect block path.
+    bool projection_uniform_prefix = false;
+    bool collect_projection_orders = false;
+    // Allow the original list-level quantity predictor with a query-global MM order.
+    bool projection_mm_dynamic = false;
+    bool projection_reuse_workspace = false;
+    bool projection_query_adaptive = false;
+    QueryPlanModel query_plan_model;
+    size_t projection_moment_dims = 0;
+    std::vector<double> projection_list_means, projection_list_variances;
     // Experimental stage-major reuse of the original survival-rate predictor.
     // 0=original list budget, 1=frozen list prior, 2=update from current stages.
     int projection_progressive = 0;
