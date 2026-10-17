@@ -57,7 +57,8 @@ def prepare_global_index(dataset_dir,nlist,pmax,normalize,perf_dir,log_dir,execu
             '--nq','0','--nlist',nlist,'--nprobes','1','--cache','--train_only',
             '--opt_levels','OPT_TRIANGLE','--multipivot_modes','projection',
             '--multipivot_scope','global','--multipivot_method','pca','--pivot_counts',pmax,
-            '--pivot_seed','0','--signature_precision','float32','--verbose']
+            '--pivot_seed','0','--signature_precision','float32','--verbose',
+            '--pivot_manifest',Path(log_dir)/f'build_pivot_manifest_{dataset}.csv']
     if normalize:native+=['--normalize']
     if rebuild:
         # Isolate this run from all dataset/index and historical cache files.

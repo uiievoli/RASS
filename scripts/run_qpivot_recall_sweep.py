@@ -156,6 +156,7 @@ def main():
     parser.add_argument('--log-dir',required=True,type=Path)
     parser.add_argument('--config',type=Path,default=DEFAULT_CONFIG,help='shared Global performance profile JSON')
     parser.add_argument('--reference-protocol',type=Path,help='freeze dataset profiles/Pmax to a previous recall run; does not reuse its indexes or measurements')
+    parser.add_argument('--compare-only',action='store_true',help='time only static Global, original Dynamic and QPivot on the same fresh index')
     parser.add_argument('--datasets',nargs='+',help='dataset names, all (default seven), or all-small (all eleven non-1B)')
     parser.add_argument('--show-config',action='store_true',help='print resolved profiles without building/running')
     parser.add_argument('--index',type=Path,help='single dataset only')
@@ -225,7 +226,8 @@ def main():
                  '-j',args.build_jobs],out/f'build_{phase}.log',env,prefix)
     protocol=dict(experiment='QPivot recall sweep',datasets=args.datasets,profiles=profiles,repeats=args.repeats,
                   config=str(args.config.resolve()),config_version=configuration['version'],
-                  multipivot_scope='global',query_threads=args.query_threads,methods=list(METHODS),resolved_indexes={},
+                  multipivot_scope='global',query_threads=args.query_threads,
+                  methods=['global','dynamic','qpivot'] if args.compare_only else list(METHODS),resolved_indexes={},
                   timing_semantics='parallel batch wall time / total queries; QPS is aggregate throughput',
                   global_policy='all persisted directions, original PCA order, no dynamic count or order',
                   dynamic_policy='original Global dynamic quantity selector, PCA prefix order, block size 8, no MM scoring',
@@ -263,9 +265,9 @@ def main():
             case=directory/f'nprobe{nprobe}';case.mkdir()
             for phase,repeats,loops in [('stats',1,1),('perf',args.repeats,cfg['loops'])]:
                 run([build/phase/'bin/benchmark_query_energy',index,query,'-',case/f'{phase}.csv',
-                     cfg['nq'],repeats,loops,args.query_threads,'qpivot_curve',nprobe,1,'-','-',groundtruth],
+                     cfg['nq'],repeats,loops,args.query_threads,'qpivot_compare' if args.compare_only else 'qpivot_curve',nprobe,1,'-','-',groundtruth],
                     case/f'{phase}.log',dataset_env,prefix)
-    write_summary(out,args.datasets,profiles,args.repeats)
+    write_summary(out,args.datasets,profiles,args.repeats,protocol['methods'])
     plot_env=dict(os.environ,MPLCONFIGDIR=str(out/'.matplotlib'))
     subprocess.run([sys.executable,ROOT/'scripts/plot_qpivot_recall.py','--root',out,
                     '--recall-min',str(args.recall_min)],check=True,env=plot_env)

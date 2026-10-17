@@ -73,6 +73,38 @@ Every method in every nprobe case must use that dataset's same persisted bank.
 The summary records Dynamic and QPivot mean pivot counts and validates both
 histograms against Pmax. Existing four-method runs can still be summarized
 using their recorded method list, including `--summarize-only --allow-partial`.
+
+For a three-method controlled experiment, add `--compare-only`: only static
+Global, original Dynamic and QPivot are timed, with one shared index. For example,
+on a 32-logical-CPU host:
+
+```bash
+bash scripts/run_qpivot_recall_sweep.sh \
+  --data-root /path/to/data --log-dir /path/to/logs/sift1m_same_index \
+  --datasets sift1m --compare-only --nprobes 16 34 100 \
+  --nq 10000 --loops 3 --repeats 5 \
+  --cpus 0-31 --query-threads 32 --offline-threads 32
+```
+
+For a complete local SIFT1M sweep over the one already validated P40 index,
+with explicit untimed warmup, use:
+
+```bash
+python3 scripts/run_sift1m_same_index_recall.py \
+  --index /path/to/global_pca_nlist1000_P40_seed0.index \
+  --data-root /path/to/data --log-dir /path/to/logs/sift1m_full_warm \
+  --cpus 0-31 --threads 32 --nq 10000 --repeats 3 --loops 1 \
+  --warmup-loops 2 --repeat-warmup-loops 1
+```
+
+This dedicated runner never builds another index: both binary preflight checks
+must validate that exact file, and its SHA-256 must match before and after.
+All five methods run at nprobe=8,10,12,16,20,24,28,30,32,34,40,48,64,100.
+The perf executable performs two full untimed warmup batches per method, then
+one full untimed batch before each timed repeat. The stats pass uses one
+initial warmup and one timed batch. Warmup behavior is confirmed in child logs;
+warmup statistics are discarded. Method order is shuffled in each repeat.
+The generic fresh-build runner retains its separate index-construction policy.
 All datasets must be under the supplied data root with the normal
 `DATASET/origin/DATASET_{base,query}.fvecs` layout.
 

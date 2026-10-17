@@ -66,7 +66,8 @@ int main(int argc,char** argv) {
         // progressive within-list policies so a Pmax sweep measures one
         // unambiguous algorithm.
         const bool qpivot=mode=="qpivot";
-        const bool qpivot_curve=mode=="qpivot_curve";
+        const bool qpivot_compare=mode=="qpivot_compare";
+        const bool qpivot_curve=mode=="qpivot_curve"||qpivot_compare;
         const bool qpivot_mode=qpivot||qpivot_curve;
         const bool mm_policy=mode=="mm_policy"||mm_compare||qpivot_mode;
         if(with_moments&&mode!="moments"&&!calibrate&&!adaptive&&!scan_order&&!mm_policy)throw std::invalid_argument("invalid benchmark mode");
@@ -210,6 +211,7 @@ int main(int argc,char** argv) {
                                {m,false},
                                {m,false,0,true},
                                {m,false,2,true,false,false,false,false,1}};
+        if(qpivot_compare)plans.erase(plans.begin(),plans.begin()+2);
         std::unique_ptr<Index> perlist;
         QueryPlanModel energy_model,mean_model;
         if(adaptive) {
@@ -256,7 +258,15 @@ int main(int argc,char** argv) {
             if(plan.adaptive)target.query_plan_model=plan.energy?energy_model:mean_model;
             target.set_multipivot_search(plan.p?MultiPivotMode::PROJECTION:MultiPivotMode::NONE,plan.p?plan.p+1:0);
         };
-        for(auto& plan:plans){select(plan);selected_index->search(nq,queries.get(),1,dist.data(),ids.data());validate();}
+        const char* warmup_env=std::getenv("TRIBASE_BENCHMARK_WARMUP_LOOPS");
+        const char* repeat_warmup_env=std::getenv("TRIBASE_BENCHMARK_REPEAT_WARMUP_LOOPS");
+        const int warmup_loops=warmup_env?std::stoi(warmup_env):1;
+        const int repeat_warmup_loops=repeat_warmup_env?std::stoi(repeat_warmup_env):0;
+        if(warmup_loops<1||repeat_warmup_loops<0)throw std::invalid_argument("warmup loops must be >=1; repeat warmup loops must be >=0");
+        std::cout<<"Untimed warmup: "<<warmup_loops<<" full batches per method; before each timed repeat: "
+                 <<repeat_warmup_loops<<" full batches"<<std::endl;
+        for(auto& plan:plans){select(plan);for(int w=0;w<warmup_loops;++w)
+            selected_index->search(nq,queries.get(),1,dist.data(),ids.data());validate();}
         std::filesystem::create_directories(std::filesystem::path(argv[4]).parent_path());
         std::ofstream output(argv[4]);output<<std::setprecision(17);
         if(calibrate) {
@@ -316,6 +326,9 @@ int main(int argc,char** argv) {
             std::shuffle(plans.begin(),plans.end(),rng);
             for(auto& plan:plans) {
                 select(plan);
+                for(int w=0;w<repeat_warmup_loops;++w)
+                    selected_index->search(nq,queries.get(),1,dist.data(),ids.data());
+                if(repeat_warmup_loops)validate();
                 benchmark_allocations::start();
                 const auto start=Clock::now();Stats stats;
                 for(size_t loop=0;loop<loops;++loop)stats=selected_index->search(nq,queries.get(),1,dist.data(),ids.data());
