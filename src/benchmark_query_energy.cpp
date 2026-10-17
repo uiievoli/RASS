@@ -1,5 +1,6 @@
 #include "Index.h"
 #include "BenchmarkAllocations.h"
+#include "ExternalGroundTruth.h"
 #include <Eigen/Dense>
 #include <omp.h>
 #include <algorithm>
@@ -16,20 +17,30 @@
 using namespace tribase;
 using Clock=std::chrono::steady_clock;
 using Matrix=Eigen::Matrix<float,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>;
-struct Plan {size_t p;bool energy;int moments=0;bool dynamic=false,adaptive=false,perlist=false,ascending=false,uniform=false;int mm_policy=0;};
+struct Plan {size_t p;bool energy;int moments=0;bool dynamic=false,adaptive=false,perlist=false,ascending=false,uniform=false;int mm_policy=0;bool baseline=false;};
 
 int main(int argc,char** argv) {
     try {
-        if(argc<9||argc>14)throw std::invalid_argument("Usage: benchmark_query_energy INDEX QUERIES DICTIONARY OUTPUT NQ REPEATS LOOPS THREADS [moments|calibrate|adaptive|scan_order|mm_policy|mm_compare [NPROBE [BUDGETS_CSV [MODEL_OR_DASH PERLIST_OR_DASH]]]]");
+        if(argc<9||argc>15)throw std::invalid_argument("Usage: benchmark_query_energy INDEX QUERIES DICTIONARY OUTPUT NQ REPEATS LOOPS THREADS [moments|calibrate|adaptive|scan_order|mm_policy|mm_compare|qpivot|qpivot_curve [NPROBE [BUDGETS_CSV [MODEL_OR_DASH PERLIST_OR_DASH [GROUNDTRUTH.i32bin|ivecs]]]]]");
         const bool with_moments=argc>=10;
         const std::string mode=with_moments?argv[9]:"energy";
         const bool calibrate=mode=="calibrate",adaptive=mode=="adaptive",scan_order=mode=="scan_order";
         const bool mm_compare=mode=="mm_compare";
-        const bool mm_policy=mode=="mm_policy"||mm_compare;
+        // QPivot combines MM's per-query direction order with the existing
+        // list-level dynamic prefix selector.  It deliberately excludes the
+        // progressive within-list policies so a Pmax sweep measures one
+        // unambiguous algorithm.
+        const bool qpivot=mode=="qpivot";
+        const bool qpivot_curve=mode=="qpivot_curve";
+        const bool qpivot_mode=qpivot||qpivot_curve;
+        const bool mm_policy=mode=="mm_policy"||mm_compare||qpivot_mode;
         if(with_moments&&mode!="moments"&&!calibrate&&!adaptive&&!scan_order&&!mm_policy)throw std::invalid_argument("invalid benchmark mode");
-        if(mm_policy&&(argc!=14||std::stoi(argv[8])!=1))throw std::invalid_argument("mm_policy requires model-or-dash, per-list-index-or-dash and one query thread");
+        if(mm_policy&&((!qpivot_mode&&argc!=14)||(qpivot_mode&&(argc<14||argc>15))||std::stoi(argv[8])!=1))
+            throw std::invalid_argument("MM/QPivot requires model-or-dash, per-list-index-or-dash and one query thread");
         if(mm_compare&&(std::string(argv[12])!="-"||std::string(argv[13])!="-"))
             throw std::invalid_argument("mm_compare accepts only the two MM policies; pass - -");
+        if(qpivot_mode&&(std::string(argv[12])!="-"||std::string(argv[13])!="-"))
+            throw std::invalid_argument("qpivot does not accept a learned model or per-list index; pass - -");
         const char* offline_env=std::getenv("TRIBASE_OFFLINE_THREADS");
         const int offline_threads=offline_env?std::stoi(offline_env):32;
         if(offline_threads<1)throw std::invalid_argument("TRIBASE_OFFLINE_THREADS must be positive");
@@ -49,6 +60,8 @@ int main(int argc,char** argv) {
             throw std::invalid_argument("expected L2 source with Triangle metadata and valid nprobe");
         auto [queries,available,d]=loadXvecs(argv[2]);
         if(size_t(d)!=index.d||nq>size_t(available))throw std::invalid_argument("query mismatch");
+        ExternalGroundTruth groundtruth;
+        if(argc==15)groundtruth=load_external_groundtruth(argv[14],nq);
         const size_t bytes=std::filesystem::file_size(argv[3]);
         if(bytes%(index.d*sizeof(double)))throw std::invalid_argument("dictionary shape mismatch");
         const size_t rows=bytes/(index.d*sizeof(double));
@@ -126,6 +139,14 @@ int main(int argc,char** argv) {
         }
         if(mm_compare)plans={{m,false,2,true,false,false,false,false,1},
                              {m,false,2,true,false,false,false,false,2}};
+        if(qpivot) {
+            plans.clear();
+            for(size_t p:budgets)plans.push_back({p,false,2,true,false,false,false,false,1});
+            plans.push_back({m,false,2,true,false,false,false,false,1});
+        }
+        if(qpivot_curve)plans={{0,false,0,false,false,false,false,false,0,true},
+                               {0,false},
+                               {m,false,2,true,false,false,false,false,1}};
         std::unique_ptr<Index> perlist;
         QueryPlanModel energy_model,mean_model;
         if(adaptive) {
@@ -159,11 +180,13 @@ int main(int argc,char** argv) {
             target.projection_scan_ascending=plan.ascending;target.projection_uniform_prefix=plan.uniform;
             target.collect_projection_orders=scan_order;
             target.projection_mm_dynamic=plan.mm_policy!=0;
+            target.projection_order_within_active_prefix=qpivot_mode;
             target.projection_reuse_workspace=plan.mm_policy==2||plan.mm_policy==3;
             target.projection_progressive=plan.mm_policy==2?1:plan.mm_policy>=3?2:0;
             target.projection_progressive_keep_exploration=plan.mm_policy!=0;
             target.projection_dynamic=plan.dynamic;target.projection_block_size=plan.dynamic?8:0;
             target.projection_query_adaptive=plan.adaptive;
+            target.opt_level=plan.baseline?OPT_NONE:OPT_TRIANGLE;
             if(plan.adaptive)target.query_plan_model=plan.energy?energy_model:mean_model;
             target.set_multipivot_search(plan.p?MultiPivotMode::PROJECTION:MultiPivotMode::NONE,plan.p?plan.p+1:0);
         };
@@ -220,8 +243,8 @@ int main(int argc,char** argv) {
         }
         std::ofstream choices(std::string(argv[4])+".choices.csv");choices<<"method,repeat,query_id,directions,canonical,predicted_ms\n";
         std::ofstream order_out(std::string(argv[4])+".orders.csv");order_out<<"method,repeat,query_id,directions,order\n";
-        output<<"directions,method,repeat,loops,nq,threads,wall_seconds,ms_per_query,mp_checks,mp_pruned,candidate_distances,total_candidates,query_signature_us_per_query,selection_us_per_query,result_mismatches,stats_enabled,triangle_pruned,candidate_decision_us,candidate_lb_us,candidate_exact_us,other_us,worker_us,mp_invalid,active_copy_us,progressive_control_us,progressive_stages,progressive_candidate_updates,workspace_growths,workspace_bytes,new_calls_per_query,new_bytes_per_query,delete_calls_per_query,mean_active_directions\n";
-        std::ofstream hist(std::string(argv[4])+".budgets.csv");hist<<"method,repeat,native_pivots,directions,list_visits\n";
+        output<<"directions,method,repeat,loops,nq,threads,wall_seconds,ms_per_query,recall,mp_checks,mp_pruned,candidate_distances,total_candidates,query_signature_us_per_query,selection_us_per_query,result_mismatches,stats_enabled,triangle_pruned,candidate_decision_us,candidate_lb_us,candidate_exact_us,other_us,worker_us,mp_invalid,active_copy_us,progressive_control_us,progressive_stages,progressive_candidate_updates,workspace_growths,workspace_bytes,new_calls_per_query,new_bytes_per_query,delete_calls_per_query,mean_active_directions\n";
+        std::ofstream hist(std::string(argv[4])+".budgets.csv");hist<<"method,repeat,configured_directions,native_pivots,directions,list_visits\n";
         std::mt19937 rng(20261016);
         for(size_t repeat=0;repeat<repeats;++repeat) {
             std::shuffle(plans.begin(),plans.end(),rng);
@@ -232,9 +255,12 @@ int main(int argc,char** argv) {
                 for(size_t loop=0;loop<loops;++loop)stats=selected_index->search(nq,queries.get(),1,dist.data(),ids.data());
                 const double seconds=std::chrono::duration<double>(Clock::now()-start).count();
                 const auto allocations=benchmark_allocations::stop();validate();
+                const double recall=groundtruth.ids
+                    ? calculate_id_recall(ids.data(),groundtruth.ids.get(),nq,1,groundtruth.width)
+                    : std::numeric_limits<double>::quiet_NaN();
                 // Derived stage totals are finalized outside the measured interval.
                 stats.summary();
-                const char* method=plan.mm_policy==1?"mm_once":plan.mm_policy==2?"mm_stage_frozen_reuse":plan.mm_policy==3?"mm_stage_updated_reuse":plan.mm_policy==4?"mm_stage_updated_alloc":
+                const char* method=plan.baseline?"ivf":qpivot_curve&&!plan.p?"triangle":qpivot_mode?"qpivot":plan.mm_policy==1?"mm_once":plan.mm_policy==2?"mm_stage_frozen_reuse":plan.mm_policy==3?"mm_stage_updated_reuse":plan.mm_policy==4?"mm_stage_updated_alloc":
                     plan.perlist?"original_perlist_dynamic":plan.dynamic?"original_global_dynamic":plan.adaptive?(mm_policy?"mm_query_model":plan.energy?"adaptive_energy":"adaptive_mean"):
                     plan.uniform?"prefix_uniform":plan.ascending?(plan.energy?"query_energy_ascending":"moment_mean_ascending"):
                     plan.p?(plan.moments==1?"moment_separation":plan.moments==2?"moment_mean":plan.energy?"query_energy":"prefix"):"triangle";
@@ -243,10 +269,10 @@ int main(int argc,char** argv) {
                     for(size_t i=0;i<order.directions.size();++i){if(i)order_out<<' ';order_out<<order.directions[i];}order_out<<'\n';}
                 size_t budget_visits=0,direction_sum=0;
                 for(size_t p=0;p<stats.active_pivot_histogram.size();++p)if(stats.active_pivot_histogram[p]) {
-                    hist<<method<<','<<repeat<<','<<p<<','<<(p?p-1:0)<<','<<stats.active_pivot_histogram[p]<<'\n';
+                    hist<<method<<','<<repeat<<','<<plan.p<<','<<p<<','<<(p?p-1:0)<<','<<stats.active_pivot_histogram[p]<<'\n';
                     budget_visits+=stats.active_pivot_histogram[p];direction_sum+=(p?p-1:0)*stats.active_pivot_histogram[p];
                 }
-                output<<plan.p<<','<<method<<','<<repeat<<','<<loops<<','<<nq<<','<<threads<<','<<seconds<<','<<1000*seconds/(loops*nq)<<','
+                output<<plan.p<<','<<method<<','<<repeat<<','<<loops<<','<<nq<<','<<threads<<','<<seconds<<','<<1000*seconds/(loops*nq)<<','<<recall<<','
                     <<stats.multipivot_checks<<','<<stats.multipivot_pruned<<','<<stats.candidate_distance_computations<<','<<stats.total_count<<','
                     <<1e6*stats.query_signature_seconds/nq<<','<<1e6*stats.query_energy_selection_seconds/nq<<",0,"
 #ifdef TRIBASE_ENABLE_STATS

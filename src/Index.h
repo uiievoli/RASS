@@ -177,6 +177,10 @@ class Index {
     bool collect_projection_orders = false;
     // Allow the original list-level quantity predictor with a query-global MM order.
     bool projection_mm_dynamic = false;
+    // Restrict query-time direction scoring/reordering to the configured
+    // active prefix of a larger installed PCA bank.  QPivot uses this to
+    // sweep Pmax without reinstalling identical candidate signatures.
+    bool projection_order_within_active_prefix = false;
     bool projection_reuse_workspace = false;
     bool projection_query_adaptive = false;
     QueryPlanModel query_plan_model;

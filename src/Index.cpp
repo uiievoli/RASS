@@ -507,6 +507,7 @@ Index& Index::operator=(Index&& other) noexcept {
     projection_uniform_prefix=other.projection_uniform_prefix;
     collect_projection_orders=other.collect_projection_orders;
     projection_mm_dynamic=other.projection_mm_dynamic;
+    projection_order_within_active_prefix=other.projection_order_within_active_prefix;
     projection_reuse_workspace=other.projection_reuse_workspace;
     projection_moment_dims=other.projection_moment_dims;
     projection_list_means=std::move(other.projection_list_means);
@@ -1521,12 +1522,14 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
             const bool use_U = multipivot_mode == MultiPivotMode::PROJECTION &&
                                global_pivots.has_U(global_active_pivots);
             if (use_U && (projection_query_energy || projection_moment_score || projection_uniform_prefix)) {
+                const size_t scored_pivots = projection_order_within_active_prefix
+                    ? global_active_pivots : global_pivots.count;
                 global_query_signature_ready = computePcaQuerySignature(
-                    queries+i*d,d,global_pivots,global_pivots.count,
+                    queries+i*d,d,global_pivots,scored_pivots,
                     global_query_pivot_squared.data(),global_query_signature_z.data(),
                     &global_query_sqrt_rho,query_centered.data());
                 global_full_query_signature_ready = global_query_signature_ready;
-                const size_t bank_dims = global_pivots.count-1;
+                const size_t bank_dims = scored_pivots-1;
                 size_t selected_dims = global_active_pivots-1;
                 const float full_query_sqrt_rho=global_query_sqrt_rho;
                 std::iota(global_direction_order.begin(),global_direction_order.begin()+bank_dims,0);
@@ -1539,8 +1542,8 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
                     // The common normalization factor is irrelevant to ranking.
                     for(size_t probe=0;probe<nprobe;++probe) {
                         const size_t lid=listids[probe];const double weight=lists[lid].list_size;
-                        const double* mean=projection_list_means.data()+lid*bank_dims;
-                        const double* variance=projection_list_variances.data()+lid*bank_dims;
+                        const double* mean=projection_list_means.data()+lid*projection_moment_dims;
+                        const double* variance=projection_list_variances.data()+lid*projection_moment_dims;
                         for(size_t dim=0;dim<bank_dims;++dim) {
                             const double delta=double(global_query_signature_z[dim])-mean[dim];
                             direction_scores[dim]+=weight*(delta*delta+(projection_moment_score==1?variance[dim]:0.));
@@ -2341,7 +2344,9 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
         throw std::invalid_argument("query-energy requires global float32 PCA projection, P>=2, no dynamic/progressive/prefix/microblocks/subnn");
     if(projection_mm_dynamic&&(!projection_dynamic||!projection_block_size||projection_moment_score!=2||projection_query_energy||
        projection_query_adaptive||projection_uniform_prefix||projection_scan_ascending||projection_progressive<0||projection_progressive>2||
-       multipivot_active_count!=global_pivots.count))throw std::invalid_argument("MM dynamic requires full-cap Global MM, original list predictor and block size");
+       (!projection_order_within_active_prefix&&multipivot_active_count!=global_pivots.count)||
+       (projection_order_within_active_prefix&&multipivot_active_count>global_pivots.count)))
+        throw std::invalid_argument("MM dynamic requires a valid Global MM cap, original list predictor and block size");
     if(projection_reuse_workspace&&(!projection_dynamic||!projection_progressive))throw std::invalid_argument("workspace reuse requires staged dynamic mode");
     if((projection_uniform_prefix&&(projection_query_energy||projection_moment_score||projection_query_adaptive))||
        (projection_scan_ascending&&(!(projection_query_energy||projection_moment_score)||projection_query_adaptive)))
