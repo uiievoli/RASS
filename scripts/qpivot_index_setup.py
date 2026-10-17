@@ -21,13 +21,16 @@ def index_header(path):
 
 def prepare_global_index(dataset_dir,nlist,pmax,normalize,perf_dir,log_dir,execute,
                          explicit=None,index_roots=(),require_groundtruth=False,
-                         groundtruth=None):
+                         groundtruth=None,rebuild=False):
     """execute(command, log) runs already configured native executables.
 
-    Reuse rich bank -> upgrade existing Triangle -> build directly from fvecs.
+    With rebuild=True, build only from raw fvecs into log_dir/indexes.
+    Legacy callers otherwise reuse rich bank -> upgrade Triangle -> build fvecs.
     Default full-query GT is also generated if requested and absent.
     """
     dataset_dir=Path(dataset_dir);dataset=dataset_dir.name
+    if rebuild and (explicit or index_roots):
+        raise ValueError('fresh Global build forbids --index/--index-root reuse; use a new log directory')
     tag='_unit' if normalize else ''
     query=Path(perf_dir)/'bin/query'
     upgrade=Path(perf_dir)/'bin/build_global_pca_index'
@@ -35,7 +38,7 @@ def prepare_global_index(dataset_dir,nlist,pmax,normalize,perf_dir,log_dir,execu
     for root in index_roots:
         root=Path(root)
         directories.extend([root/dataset,root/dataset/'index',root])
-    paths=sorted(set(path for directory in directories for path in directory.glob('*.index')))
+    paths=[] if rebuild else sorted(set(path for directory in directories for path in directory.glob('*.index')))
     compatible=[]
     for path in paths:
         h=index_header(path)
@@ -56,6 +59,22 @@ def prepare_global_index(dataset_dir,nlist,pmax,normalize,perf_dir,log_dir,execu
             '--multipivot_scope','global','--multipivot_method','pca','--pivot_counts',pmax,
             '--pivot_seed','0','--signature_precision','float32','--verbose']
     if normalize:native+=['--normalize']
+    if rebuild:
+        # Isolate this run from all dataset/index and historical cache files.
+        # No --cache, --from_index, --load_index or centroid file on this path.
+        base=dataset_dir/'origin'/f'{dataset}_base.fvecs'
+        if not base.is_file():raise FileNotFoundError(f'fresh build requires base vectors: {base}')
+        directory=Path(log_dir)/'indexes'/dataset
+        directory.mkdir(parents=True,exist_ok=True)
+        index=directory/f'global_pca_nlist{nlist}_P{pmax}_seed0{tag}.index'
+        if index.exists() or Path(str(index)+'.partial').exists():
+            raise ValueError(f'fresh index output already exists; use a new log directory: {index}')
+        print(f'FRESH BUILD Global PCA Pmax={pmax}, directions={pmax-1}: {base}',flush=True)
+        execute([*[arg for arg in native if arg!='--cache'],'--index_path',index],
+                Path(log_dir)/f'build_index_{dataset}.log')
+        h=index_header(index)
+        if not h or (h['nlist'],h['scope'],h['method'],h['pmax'],h['metric'])!=(nlist,0,'pca',pmax,1) or not h['opt']&1:
+            raise RuntimeError(f'fresh builder produced incompatible Global PCA index: {index}')
     if index is None:
         directory=dataset_dir/'index';directory.mkdir(parents=True,exist_ok=True)
         index=directory/f'qpivot_v10_nlist_{nlist}{tag}_mp_global_pca_P{pmax}_seed0.index'
@@ -69,7 +88,7 @@ def prepare_global_index(dataset_dir,nlist,pmax,normalize,perf_dir,log_dir,execu
             if not query.is_file():raise FileNotFoundError(f'missing native builder {query}; rerun without --skip-build')
             print(f'BUILD missing Global PCA index from base vectors: {base}',flush=True)
             execute([*native,'--index_path',index],log_dir/f'build_index_{dataset}.log')
-    print(f'REUSE Global PCA index: {index}',flush=True)
+    print(f'{"BUILT fresh" if rebuild else "REUSE"} Global PCA index: {index}',flush=True)
     if require_groundtruth:
         gt=Path(groundtruth) if groundtruth else dataset_dir/'result'/f'groundtruth_1{tag}.bin'
         if not gt.is_file():

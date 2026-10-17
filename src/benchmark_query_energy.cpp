@@ -19,8 +19,43 @@ using Clock=std::chrono::steady_clock;
 using Matrix=Eigen::Matrix<float,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>;
 struct Plan {size_t p;bool energy;int moments=0;bool dynamic=false,adaptive=false,perlist=false,ascending=false,uniform=false;int mm_policy=0;bool baseline=false;};
 
+static void validateQPivotIndex(const Index& index,size_t expected_pmax=0) {
+    const size_t p=index.global_pivots.count;
+    if(index.metric!=METRIC_L2||!(index.added_opt_level&OPT_TRIANGLE)||
+       index.multipivot_scope!=MultiPivotScope::GLOBAL||index.multipivot_method!="pca"||
+       index.signature_precision!=SignaturePrecision::FLOAT32||p<2||
+       p!=index.multipivot_built_count||!index.global_pivots.has_U(p)||
+       (expected_pmax&&p!=expected_pmax))
+        throw std::invalid_argument("QPivot requires a rich Global float32 PCA index with matching Pmax: expected="+
+            std::to_string(expected_pmax)+" actual="+std::to_string(p));
+    for(size_t lid=0;lid<index.nlist;++lid) {
+        const auto& list=index.lists[lid];const auto& meta=list.pivots;
+        if(!list.list_size)continue;
+        if(!meta.external_projection_geometry||meta.count!=p||!meta.usable_signature(p)||
+           meta.signature_precision!=SignaturePrecision::FLOAT32||
+           meta.signature_candidate_count!=list.list_size||
+           meta.candidate_centroid_squared.size()!=list.list_size)
+            throw std::invalid_argument("QPivot index has missing or incompatible persisted candidate signatures: list="+
+                std::to_string(lid)+" candidates="+std::to_string(list.list_size)+
+                " GlobalP="+std::to_string(p)+" listP="+std::to_string(meta.count)+
+                " external_geometry="+std::to_string(meta.external_projection_geometry)+
+                " signature_candidates="+std::to_string(meta.signature_candidate_count)+
+                " signature_scalars="+std::to_string(meta.signature_data.size())+
+                " expected_scalars="+std::to_string(p*list.list_size)+
+                " center_norms="+std::to_string(meta.candidate_centroid_squared.size()));
+    }
+}
+
 int main(int argc,char** argv) {
     try {
+        if(argc==4&&std::string(argv[1])=="--validate-qpivot-index") {
+            Index index;index.load_index(argv[2]);
+            validateQPivotIndex(index,std::stoull(argv[3]));
+            std::cout<<"Validated Global PCA index: Pmax="<<index.global_pivots.count
+                     <<" directions="<<index.global_pivots.count-1<<" lists="<<index.nlist
+                     <<"; all persisted candidate signatures compatible"<<std::endl;
+            return 0;
+        }
         if(argc<9||argc>15)throw std::invalid_argument("Usage: benchmark_query_energy INDEX QUERIES DICTIONARY_OR_DASH OUTPUT NQ REPEATS LOOPS THREADS [moments|calibrate|adaptive|scan_order|mm_policy|mm_compare|qpivot|qpivot_curve [NPROBE [BUDGETS_CSV [MODEL_OR_DASH PERLIST_OR_DASH [GROUNDTRUTH.i32bin|ivecs]]]]] (QPivot requires DICTIONARY_OR_DASH=- and a rich Global PCA index)");
         const bool with_moments=argc>=10;
         const std::string mode=with_moments?argv[9]:"energy";
@@ -77,21 +112,8 @@ int main(int argc,char** argv) {
         if(use_persisted_dictionary) {
             if(std::string(argv[3])!="-")
                 throw std::invalid_argument("QPivot requires DICTIONARY=- and uses the loaded index PCA bank");
-            if(index.multipivot_scope!=MultiPivotScope::GLOBAL||index.multipivot_method!="pca"||
-               index.signature_precision!=SignaturePrecision::FLOAT32||index.global_pivots.count<2||
-               index.global_pivots.count!=index.multipivot_built_count||
-               !index.global_pivots.has_U(index.global_pivots.count))
-                throw std::invalid_argument("QPivot requires a rich Global float32 PCA Pmax index");
+            validateQPivotIndex(index);
             m=index.global_pivots.count-1;
-            for(size_t lid=0;lid<index.nlist;++lid) {
-                const auto& list=index.lists[lid];
-                if(!list.list_size)continue;
-                if(!list.pivots.external_projection_geometry||
-                   list.pivots.count!=index.global_pivots.count||
-                   !list.pivots.usable_signature(index.global_pivots.count)||
-                   list.pivots.candidate_centroid_squared.size()!=list.list_size)
-                    throw std::invalid_argument("QPivot index has missing or incompatible persisted candidate signatures");
-            }
             std::cout<<"Using persisted Global PCA bank and candidate signatures: Pmax="
                      <<index.global_pivots.count<<" directions="<<m<<std::endl;
         } else {

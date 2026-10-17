@@ -158,6 +158,8 @@ def main():
         return
     if out.exists() and any(out.iterdir()):
         parser.error('log-dir must be new or empty')
+    if args.index or args.index_root:
+        parser.error('QPivot now rebuilds Global PCA from base vectors; --index/--index-root reuse is disabled')
     config = dict(sweep_defaults(load_profiles(args.config)).get(args.dataset, {}))
     for key in ('nlist', 'nprobe', 'pmax', 'nq', 'loops'):
         value = getattr(args, key)
@@ -197,8 +199,11 @@ def main():
             run(['cmake', '--build', build, '--target', 'benchmark_query_energy',
                  'build_global_pca_index','query', '-j', args.build_jobs], out/f'build_{phase}.log', env, prefix)
     index=prepare_global_index(dataset_dir,config['nlist'],pmax_values[-1],normalize,build_root/'perf',out,
-        lambda command,log:run(command,log,env,prefix),explicit=args.index,index_roots=args.index_root)
+        lambda command,log:run(command,log,env,prefix),rebuild=True)
     if not index.is_file(): parser.error('missing rich Global PCA Pmax index; pass --index')
+    for phase in ('perf','stats'):
+        run([build_root/phase/'bin/benchmark_query_energy','--validate-qpivot-index',index,pmax_values[-1]],
+            out/f'validate_index_{phase}.log',env,prefix)
     query = out/'queries.fvecs'
     _, ids = sample_queries(query_source, query, config['nq'], args.seed)
     protocol = dict(experiment='QPivot', definition='dynamic pivot count + MM dynamic pivot order',
@@ -207,6 +212,7 @@ def main():
                            seed=args.seed, query_ids=ids, multipivot_scope='global', normalize=normalize),
         index=str(index), query_source=str(query_source),
         dictionary='persisted in rich index',dictionary_directions=pmax_values[-1]-1,
+        index_policy='fresh Global PCA from base vectors; one shared index for all budget caps',
         config_source=str(args.config.resolve()),
         sweep_semantics='budget caps within one fixed bank; every cap scores the same persisted dictionary',
         query_threads=1, offline_threads=args.offline_threads)

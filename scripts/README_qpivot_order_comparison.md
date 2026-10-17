@@ -18,33 +18,33 @@ uniform query sample; each query uses complete candidate lists without
 candidate subsampling. The default eight queries are a screening experiment;
 increase to 32 or more for a stronger query sample.
 
-For a fixed candidate pool of p=64 PCA directions, select n directions only
-from that pool and compare against the original first n directions:
+Every dataset now rebuilds a fresh Global PCA index from raw base fvecs, using
+`scripts/qpivot_performance_profiles.json` (SIFT1M Pmax=40, for example).
+The index includes IVF training, Global U, candidate projection coordinates,
+residuals and center norms. Outputs are isolated in `LOG_DIR/indexes/DATASET`.
+Historical indexes, old centroids and previous result reuse are disabled;
+`--index-root` and `--reuse-results` are rejected. Existing old files are preserved.
+Use a new output directory for each experiment.
+
+All selectors use this one bank and may only select from its M=Pmax-1 rows.
+QPivot changes query-time ordering/budget, never the index basis. Both dataset
+normalization and candidate signatures use the native Global builder. Before
+measurement the runner reloads and validates all candidate signature tables.
+No external dictionary is installed during evaluation.
+
+For the previous Global Pmax and per-dataset checkpoint grids:
 
 ```bash
-python3 -u scripts/run_qpivot_order_comparison.py \
-  --log-dir logs/qpivot_fixed_pool64 \
-  --datasets sift1m dbpedia3072m_holdout \
-  --pool-directions 64 --budgets 4 8 16 24 32 40 48 56 64 \
-  --nq 32 --threads 32 --cpus 0-31 \
-  --index-root logs/qpivot_order_all11_20261017
+python3 scripts/run_qpivot_order_comparison.py \
+  --log-dir logs/qpivot_global_pmax_fresh \
+  --global-pool-config scripts/qpivot_performance_profiles.json \
+  --nq 32 --threads 32 --cpus 0-31
 ```
 
-The pool is exactly the original PCA rows `[0,p)`, fixed before queries are
-evaluated. MM and Greedy may not choose rows beyond p even if the persisted
-index is larger. Stored moment arrays retain their full-bank stride; candidate
-row storage and IVF membership are reused. At n=p every method selects the
-same set and must obtain the same pruning count. `--pool-directions` counts
-directions, so p=64 corresponds to the repository's Pmax=65 including center.
-`--index-root` can point to a previous experiment to reuse its `DATASET/index_cache`.
-
-All methods use the same persisted Global PCA bank. Missing banks are built
-inside the experiment's `index_cache` from an existing current-format Triangle
-index. IVF centroids, list memberships and candidate order are preserved.
-The runner reads index headers, rather than trusting filenames, to check the
-metric, nlist, scope and bank size. Unit-normalized datasets use unit indexes
-and the same query normalization as query.cpp. No external PCA dictionary is
-installed and no candidate signatures are recomputed during evaluation.
+At n=M all methods must return the same pruning count. This is checked in the
+experiment analysis. Two PNG/PDF figures per dataset (selection and gain), plus
+one combined selection overview, appear in `figures_fixed_pool/` when using
+`--global-pool-config`. This is an offline selection-quality test, not latency.
 
 Budget `L` counts PCA directions; the repository's pivot count is `P=L+1`,
 including the center. Default checkpoints are `L=4,8,16,32,64,128`, clipped to
@@ -85,6 +85,7 @@ pruning includes Triangle and uses all visited candidates. The float32 stored
 projections are accumulated in float64. The safety check flags material false
 pruning beyond `2e-5 * max(1, exact_distance_squared)`; this is a floating-point
 diagnostic tolerance rather than a proof of exact floating-point bounds.
+
 `selection_seconds` is cumulative offline construction/evaluation time and
 includes checkpoint reporting; do not use it as online selector latency.
 

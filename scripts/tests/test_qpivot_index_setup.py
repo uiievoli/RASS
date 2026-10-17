@@ -18,6 +18,28 @@ def write_index(path,p=5,scope=0,nlist=4):
 
 
 class AutomaticIndexSetup(unittest.TestCase):
+    def test_forced_build_ignores_old_rich_and_triangle_indexes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);ds=root/'data/demo';origin=ds/'origin'
+            origin.mkdir(parents=True);(origin/'demo_base.fvecs').touch()
+            old=ds/'index/global_P5.index';write_index(old)
+            old_bytes=old.read_bytes();logs=root/'logs';logs.mkdir();commands=[]
+            def execute(cmd,log):
+                cmd=list(map(str,cmd));commands.append(cmd)
+                for forbidden in ['--cache','--load_index','--from_index','--centroids_path']:
+                    self.assertNotIn(forbidden,cmd)
+                write_index(Path(cmd[cmd.index('--index_path')+1]))
+            index=setup.prepare_global_index(ds,4,5,False,root/'build',logs,execute,rebuild=True)
+            self.assertEqual(index.parent,logs/'indexes/demo')
+            self.assertEqual(len(commands),1);self.assertEqual(old.read_bytes(),old_bytes)
+            with self.assertRaisesRegex(ValueError,'already exists'):
+                setup.prepare_global_index(ds,4,5,False,root/'build',logs,execute,rebuild=True)
+
+    def test_forced_build_rejects_reuse_arguments(self):
+        with self.assertRaisesRegex(ValueError,'forbids'):
+            setup.prepare_global_index(Path('/tmp/demo'),4,5,False,Path('/tmp'),Path('/tmp'),
+                lambda *args:None,explicit=Path('/tmp/old.index'),rebuild=True)
+
     def test_fresh_normalized_data_builds_index_and_gt(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);ds=root/'data/dbpedia3072m_holdout';origin=ds/'origin'

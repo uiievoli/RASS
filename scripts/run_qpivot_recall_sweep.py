@@ -153,6 +153,8 @@ def main():
     if out.exists() and any(out.iterdir()):parser.error('log-dir must be new or empty')
     if any((args.index,args.query,args.groundtruth)) and len(args.datasets)!=1:
         parser.error('explicit paths require one dataset')
+    if args.index or args.index_root:
+        parser.error('QPivot now rebuilds Global PCA from base vectors; --index/--index-root reuse is disabled')
     profiles={}
     for dataset in args.datasets:
         cfg=dict(configuration['datasets'][dataset])
@@ -179,7 +181,9 @@ def main():
                  '-j',args.build_jobs],out/f'build_{phase}.log',env,prefix)
     protocol=dict(experiment='QPivot recall sweep',datasets=args.datasets,profiles=profiles,repeats=args.repeats,
                   config=str(args.config.resolve()),config_version=configuration['version'],
-                  multipivot_scope='global',query_threads=1,methods=list(METHODS),resolved_indexes={})
+                  multipivot_scope='global',query_threads=1,methods=list(METHODS),resolved_indexes={},
+                  index_policy='fresh Global PCA from base vectors; shared by every method and nprobe',
+                  qpivot_policy='reorder/select only the persisted Pmax-1 directions; no basis replacement')
     (out/'protocol.json').write_text(json.dumps(protocol,indent=2)+'\n')
     for dataset in args.datasets:
         cfg=profiles[dataset];source=args.data_root.resolve()
@@ -195,8 +199,11 @@ def main():
         if cfg['nq']>source_nq:raise ValueError(f'{dataset}: nq exceeds available queries')
         index=prepare_global_index(source,cfg['nlist'],cfg['pmax'],normalize,build/'perf',out,
             lambda command,log:run(command,log,env,prefix),explicit=args.index,index_roots=args.index_root,
-            require_groundtruth=True,groundtruth=args.groundtruth)
+            require_groundtruth=True,groundtruth=args.groundtruth,rebuild=True)
         if not index.is_file():raise ValueError(f'missing rich Global PCA index for {dataset}')
+        for phase in ('perf','stats'):
+            run([build/phase/'bin/benchmark_query_energy','--validate-qpivot-index',index,cfg['pmax']],
+                out/f'validate_index_{dataset}_{phase}.log',env,prefix)
         protocol['resolved_indexes'][dataset]=str(index)
         (out/'protocol.json').write_text(json.dumps(protocol,indent=2)+'\n')
         directory=out/dataset;directory.mkdir()

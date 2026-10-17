@@ -29,14 +29,15 @@ bash scripts/run_qpivot_recall_sweep.sh \
   --cpus 0-55 --offline-threads 56 --build-jobs 16 --repeats 3
 ```
 
-Use a new result directory. The runner builds the required binaries, reuses
-an exact-size rich Global bank when available, otherwise upgrades a compatible
-Triangle IVF, otherwise builds from base/query fvecs. Missing default
-groundtruth is generated automatically. Existing wider banks are preserved.
-They are not silently used with a smaller active cap: query projection and
-MM scoring must both use exactly the configured M dimensions.
+Use a new result directory. The runner rebuilds each Global PCA index from
+base fvecs, including IVF training and candidate signatures. It never loads
+historical indexes, upgrades old Triangle banks or uses cached centroids.
+New indexes live in `LOG_DIR/indexes/DATASET/`; old files are preserved.
+Missing default groundtruth is generated automatically.
+Query projection and MM scoring both use exactly the configured M dimensions.
 
-Extra cache directories can be supplied with repeated `--index-root DIR`.
+`--index` and `--index-root` are rejected to prevent accidental old-bank reuse.
+Both perf and stats binaries fully validate the new index before measurements.
 All datasets must be under the supplied data root with the normal
 `DATASET/origin/DATASET_{base,query}.fvecs` layout.
 
@@ -67,5 +68,8 @@ It uses one fixed dictionary (SIFT1M: M=39) and varies only the maximum
 candidate filtering budget. Every budget uses the same query projection and
 scoring bank, so this sweep does not measure changes in dictionary size.
 `--pmax ...` explicitly overrides its default grid, including larger diagnostic
-banks if requested. The fixed-pool order-comparison experiment remains separate
-and may deliberately use a larger dictionary to study selection quality.
+banks if requested. The order-comparison runner now also rebuilds Global PCA
+using the same bounded dataset profiles. It never replaces the stored basis
+with an external dictionary: QPivot is solely a query-time optimization over
+the Global index's persisted projection directions. Selecting L directions
+always satisfies L <= M = Pmax-1.
