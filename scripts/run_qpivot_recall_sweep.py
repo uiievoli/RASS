@@ -12,19 +12,9 @@ import sys
 
 import numpy as np
 from qpivot_index_setup import prepare_global_index
+from qpivot_profiles import CONFIG, DEFAULT_CONFIG, PROFILES, load_profiles
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILES = {
-    'fasion_mnist_784': dict(nlist=256, pmax=96, nprobes=[2,3,4,5,6,7,8,10,12,16], nq=1000, loops=3),
-    'msong_holdout': dict(nlist=1000, pmax=96, nprobes=[4,6,8,10,12,14,16,20,24,32], nq=200, loops=3),
-    'sift1m': dict(nlist=1000, pmax=129, nprobes=[8,12,16,20,24,28,30,32,34,40,48,64], nq=1000, loops=3),
-    'glove25': dict(nlist=1024, pmax=26, nprobes=[10,15,20,25,30,35,40,45,50,60,80], nq=1000, loops=3),
-    'StarLightCurves': dict(nlist=128, pmax=104, nprobes=[1,2,3,4,5,6,8,10,12], nq=823, loops=5),
-    'dbpedia1536m_holdout': dict(nlist=1000, pmax=257, nprobes=[20,30,40,60,80,100,120,140,160,200], nq=200, loops=1),
-    'dbpedia3072m_holdout': dict(nlist=1000, pmax=512,
-        nprobes=[8,16,24,32,48,64,96,128,160,192,256,384,512,768,1000],
-        nq=100, loops=1, normalize=True),
-}
 METHODS = ('ivf', 'triangle', 'qpivot')
 
 
@@ -132,7 +122,9 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-root',required=True,type=Path)
     parser.add_argument('--log-dir',required=True,type=Path)
-    parser.add_argument('--datasets',nargs='+',default=['sift1m'],choices=sorted(PROFILES))
+    parser.add_argument('--config',type=Path,default=DEFAULT_CONFIG,help='shared Global performance profile JSON')
+    parser.add_argument('--datasets',nargs='+',help='dataset names, all (default seven), or all-small (all eleven non-1B)')
+    parser.add_argument('--show-config',action='store_true',help='print resolved profiles without building/running')
     parser.add_argument('--index',type=Path,help='single dataset only')
     parser.add_argument('--index-root',type=Path,action='append',default=[],help='extra reusable index/cache root; repeatable')
     parser.add_argument('--query',type=Path,help='single dataset only')
@@ -153,16 +145,23 @@ def main():
         env=dict(os.environ,MPLCONFIGDIR=str(out/'.matplotlib'))
         subprocess.run([sys.executable,ROOT/'scripts/plot_qpivot_recall.py','--root',out,
                         '--recall-min',str(args.recall_min)],check=True,env=env);return
+    configuration=load_profiles(args.config)
+    if not args.datasets or args.datasets==['all']:args.datasets=configuration['default_datasets']
+    elif args.datasets==['all-small']:args.datasets=list(configuration['datasets'])
+    if len(set(args.datasets))!=len(args.datasets) or any(ds not in configuration['datasets'] for ds in args.datasets):
+        parser.error('datasets must be a unique subset of the configured non-1B datasets')
     if out.exists() and any(out.iterdir()):parser.error('log-dir must be new or empty')
     if any((args.index,args.query,args.groundtruth)) and len(args.datasets)!=1:
         parser.error('explicit paths require one dataset')
     profiles={}
     for dataset in args.datasets:
-        cfg=dict(PROFILES[dataset])
+        cfg=dict(configuration['datasets'][dataset])
         for key in ('nlist','pmax','nprobes','nq','loops'):
             value=getattr(args,key)
             if value is not None:cfg[key]=value
-        cfg['nprobes']=sorted(set(cfg['nprobes']));profiles[dataset]=cfg
+        cfg['nprobes']=sorted(set(cfg['nprobes']));cfg['dictionary_directions']=cfg['pmax']-1;profiles[dataset]=cfg
+    if args.show_config:
+        print(json.dumps(profiles,indent=2));return
     if args.repeats<3:parser.error('repeats must be >=3')
     out.mkdir(parents=True)
     env=dict(os.environ,OMP_NUM_THREADS=str(args.offline_threads),OMP_DYNAMIC='FALSE',OMP_PROC_BIND='close',
@@ -179,7 +178,8 @@ def main():
             run(['cmake','--build',directory,'--target','benchmark_query_energy','build_global_pca_index','query',
                  '-j',args.build_jobs],out/f'build_{phase}.log',env,prefix)
     protocol=dict(experiment='QPivot recall sweep',datasets=args.datasets,profiles=profiles,repeats=args.repeats,
-                  multipivot_scope='global',query_threads=1,methods=list(METHODS))
+                  config=str(args.config.resolve()),config_version=configuration['version'],
+                  multipivot_scope='global',query_threads=1,methods=list(METHODS),resolved_indexes={})
     (out/'protocol.json').write_text(json.dumps(protocol,indent=2)+'\n')
     for dataset in args.datasets:
         cfg=profiles[dataset];source=args.data_root.resolve()
@@ -197,6 +197,8 @@ def main():
             lambda command,log:run(command,log,env,prefix),explicit=args.index,index_roots=args.index_root,
             require_groundtruth=True,groundtruth=args.groundtruth)
         if not index.is_file():raise ValueError(f'missing rich Global PCA index for {dataset}')
+        protocol['resolved_indexes'][dataset]=str(index)
+        (out/'protocol.json').write_text(json.dumps(protocol,indent=2)+'\n')
         directory=out/dataset;directory.mkdir()
         query=directory/'queries.fvecs';copy_query_prefix(query_source,query,cfg['nq'])
         groundtruth=directory/'groundtruth.i32bin';groundtruth_prefix(gt_source,groundtruth,cfg['nq'],source_nq)

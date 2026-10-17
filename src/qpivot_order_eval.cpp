@@ -75,7 +75,7 @@ int main(int argc,char** argv) {
 #ifndef TRIBASE_ENABLE_STATS
     throw std::invalid_argument("qpivot_order_eval requires ENABLE_STATS=ON to freeze native list-entry thresholds");
 #endif
-    if(argc!=8)throw std::invalid_argument("Usage: qpivot_order_eval INDEX QUERIES OUTPUT NQ NPROBE BUDGETS_CSV NORMALIZE_0_OR_1");
+    if(argc!=8&&argc!=9)throw std::invalid_argument("Usage: qpivot_order_eval INDEX QUERIES OUTPUT NQ NPROBE BUDGETS_CSV NORMALIZE_0_OR_1 [POOL_DIRECTIONS]");
     const size_t nq=std::stoull(argv[4]),probes=std::stoull(argv[5]);
     std::vector<size_t> budgets;std::stringstream stream(argv[6]);std::string cell;
     while(std::getline(stream,cell,','))budgets.push_back(std::stoull(cell));
@@ -85,7 +85,9 @@ int main(int argc,char** argv) {
        index.multipivot_scope!=MultiPivotScope::GLOBAL||index.multipivot_method!="pca"||
        index.global_pivots.count<2||!index.global_pivots.has_U(index.global_pivots.count))
         throw std::invalid_argument("requires rich Global PCA Triangle index");
-    const size_t m=index.global_pivots.count-1;
+    const size_t bank_m=index.global_pivots.count-1;
+    const size_t m=argc==9?std::stoull(argv[8]):bank_m;
+    if(!m||m>bank_m)throw std::invalid_argument("pool directions must be within persisted PCA bank");
     if(!nq||!probes||probes>index.nlist||budgets.empty()||!budgets.front()||budgets.back()>m)
         throw std::invalid_argument("invalid nq/nprobe/budgets");
     auto [queries,available,d]=loadXvecs(argv[2]);
@@ -101,7 +103,7 @@ int main(int argc,char** argv) {
         return std::pair(a.query_id,a.probe_rank)<std::pair(b.query_id,b.probe_rank);});
     const std::filesystem::path out(argv[3]);std::filesystem::create_directories(out);
     listVisitsToCsv((out/"visits.csv").string(),stats.list_visits,false,"frozen_triangle",index.nlist,probes,
-                   OPT_TRIANGLE,MultiPivotMode::NONE,MultiPivotScope::GLOBAL,"pca",m+1,index.multipivot_seed,1.);
+                   OPT_TRIANGLE,MultiPivotMode::NONE,MultiPivotScope::GLOBAL,"pca",bank_m+1,index.multipivot_seed,1.);
     std::ofstream results(out/"results.csv"),orders(out/"orders.csv");
     results<<std::setprecision(17)<<"query_id,method,directions,pivots,total_candidates,triangle_pruned,triangle_survivors,mp_pruned,exact_survivors,conditional_prune_rate,overall_prune_rate,selection_seconds,false_prunes\n";
     orders<<"query_id,method,directions,order\n";
@@ -118,7 +120,7 @@ int main(int argc,char** argv) {
             const auto& list=index.lists[visit.list_id];total+=list.list_size;
             triangle+=visit.tri+visit.tri_large;c.n+=visit.scan_end-visit.scan_begin;
             for(size_t dim=0;dim<m;++dim) {
-                const double delta=c.qz[dim]-index.projection_list_means[visit.list_id*m+dim];
+                const double delta=c.qz[dim]-index.projection_list_means[visit.list_id*bank_m+dim];
                 mm[dim]+=list.list_size*delta*delta;
             }
         }

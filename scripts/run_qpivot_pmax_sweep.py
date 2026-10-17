@@ -12,19 +12,16 @@ import sys
 
 import numpy as np
 from qpivot_index_setup import prepare_global_index
+from qpivot_profiles import CONFIG, DEFAULT_CONFIG, load_profiles
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULTS = {
-    'sift1m': dict(nlist=1000, nprobe=34, pmax=[5, 9, 13, 17, 21, 25, 33, 41, 65, 97, 129], nq=32, loops=5),
-    'fasion_mnist_784': dict(nlist=256, nprobe=7, pmax=[5, 9, 17, 25, 33, 49, 65, 81, 96], nq=32, loops=10),
-    'msong_holdout': dict(nlist=1000, nprobe=16, pmax=[5, 9, 17, 25, 33, 49, 65, 81, 96], nq=32, loops=5),
-    'glove25': dict(nlist=1024, nprobe=50, pmax=[3, 5, 7, 9, 13, 17, 21, 26], nq=32, loops=10),
-    'StarLightCurves': dict(nlist=128, nprobe=4, pmax=[5, 9, 17, 25, 33, 49, 65, 81, 104], nq=32, loops=30),
-    'dbpedia1536m_holdout': dict(nlist=1000, nprobe=160, pmax=[9, 17, 33, 49, 65, 97, 129, 193, 257], nq=20, loops=1),
-    'dbpedia3072m_holdout': dict(nlist=1000, nprobe=160,
-        pmax=[9,17,33,49,65,97,129,193,257,321,385,449,512],
-        nq=20, loops=1, normalize=True),
-}
+def sweep_defaults(configuration):
+    return {ds:dict(nlist=p['nlist'],nprobe=p['fixed_nprobe'],pmax=p['budget_grid'],
+                    nq=20 if ds.startswith('dbpedia') else 32,loops=p['loops'],normalize=p.get('normalize',False))
+            for ds,p in configuration['datasets'].items()}
+
+
+DEFAULTS=sweep_defaults(CONFIG)
 
 
 def run(command, log, env, prefix=()):
@@ -128,6 +125,8 @@ def main():
     parser.add_argument('--data-root', required=True, type=Path)
     parser.add_argument('--log-dir', required=True, type=Path)
     parser.add_argument('--dataset', default='sift1m')
+    parser.add_argument('--config',type=Path,default=DEFAULT_CONFIG)
+    parser.add_argument('--show-config',action='store_true')
     parser.add_argument('--index', type=Path)
     parser.add_argument('--index-root',type=Path,action='append',default=[],help='extra reusable index/cache root; repeatable')
     parser.add_argument('--query', type=Path)
@@ -159,12 +158,14 @@ def main():
         return
     if out.exists() and any(out.iterdir()):
         parser.error('log-dir must be new or empty')
-    config = dict(DEFAULTS.get(args.dataset, {}))
+    config = dict(sweep_defaults(load_profiles(args.config)).get(args.dataset, {}))
     for key in ('nlist', 'nprobe', 'pmax', 'nq', 'loops'):
         value = getattr(args, key)
         if value is not None: config[key] = value
         if key not in config: parser.error(f'custom dataset requires --{key}')
     pmax_values = sorted(set(config['pmax']))
+    if args.show_config:
+        print(json.dumps(dict(dataset=args.dataset,scope='global',**config),indent=2));return
     if len(pmax_values) < 2 or pmax_values[0] < 3:
         parser.error('pmax needs at least two unique values, each >=3')
     dataset_dir = args.data_root.resolve()
@@ -205,7 +206,10 @@ def main():
                            pmax=pmax_values, nq=config['nq'], loops=config['loops'], repeats=args.repeats,
                            seed=args.seed, query_ids=ids, multipivot_scope='global', normalize=normalize),
         index=str(index), query_source=str(query_source),
-        dictionary='persisted in rich index', query_threads=1, offline_threads=args.offline_threads)
+        dictionary='persisted in rich index',dictionary_directions=pmax_values[-1]-1,
+        config_source=str(args.config.resolve()),
+        sweep_semantics='budget caps within one fixed bank; every cap scores the same persisted dictionary',
+        query_threads=1, offline_threads=args.offline_threads)
     (out/'protocol.json').write_text(json.dumps(protocol, indent=2, ensure_ascii=False)+'\n')
     budgets = ','.join(str(p-1) for p in pmax_values[:-1])
     for phase, repeats, loops in [('stats', 1, 1), ('perf', args.repeats, config['loops'])]:

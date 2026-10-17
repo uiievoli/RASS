@@ -1,0 +1,85 @@
+{
+  "version": 2,
+  "purpose": "Global QPivot performance rerun with bounded persisted dictionaries; historical references, not claimed MM optima",
+  "pivot_convention": "Pmax includes centroid; projected dictionary M=Pmax-1",
+  "default_datasets": ["sift1m", "fasion_mnist_784", "msong_holdout", "glove25", "StarLightCurves", "dbpedia1536m_holdout", "dbpedia3072m_holdout"],
+  "datasets": {
+    "sift1m": {
+      "nlist": 1000, "scope": "global", "pmax": 40,
+      "nprobes": [8,12,16,20,24,28,30,32,34,40,48,64,100],
+      "nq": 1000, "loops": 3, "fixed_nprobe": 34,
+      "budget_grid": [5,9,13,17,21,25,33,40],
+      "reference": "Historical original dynamic Pmax=40; Global static fine scan near P36. Global MM optimum remains to be measured."
+    },
+    "fasion_mnist_784": {
+      "nlist": 256, "scope": "global", "pmax": 64,
+      "nprobes": [2,3,4,5,6,7,8,10,12,16],
+      "nq": 1000, "loops": 3, "fixed_nprobe": 7,
+      "budget_grid": [5,9,17,25,33,49,64],
+      "reference": "Historical Global static reference P64; per-list P48 is not substituted into Global experiments."
+    },
+    "msong_holdout": {
+      "nlist": 1000, "scope": "global", "pmax": 64,
+      "nprobes": [4,6,8,10,12,14,16,20,24,32],
+      "nq": 200, "loops": 3, "fixed_nprobe": 16,
+      "budget_grid": [5,9,17,25,33,49,64],
+      "reference": "Historical Global static reference P64; per-list fine optimum P34 is a different scope."
+    },
+    "glove25": {
+      "nlist": 1024, "scope": "global", "pmax": 14,
+      "nprobes": [10,15,20,25,30,35,40,45,50,60,80],
+      "nq": 1000, "loops": 3, "fixed_nprobe": 50,
+      "budget_grid": [3,5,7,9,11,13,14],
+      "reference": "Fine static Global scan peak P14; using this as a bounded MM dictionary reference, not a proven MM optimum."
+    },
+    "StarLightCurves": {
+      "nlist": 128, "scope": "global", "pmax": 18,
+      "nprobes": [1,2,3,4,5,6,8,10,12],
+      "nq": 823, "loops": 5, "fixed_nprobe": 4,
+      "budget_grid": [3,5,9,13,17,18],
+      "reference": "Fine static Global scan peak P18; replaces P104 wide dictionary for the performance rerun."
+    },
+    "dbpedia1536m_holdout": {
+      "nlist": 1000, "scope": "global", "pmax": 128,
+      "nprobes": [20,30,40,60,80,100,120,140,160,200],
+      "nq": 200, "loops": 1, "fixed_nprobe": 160,
+      "budget_grid": [9,17,33,49,65,97,128],
+      "reference": "Historical Global static reference P128; replaces the full M256 diagnostic bank."
+    },
+    "dbpedia3072m_holdout": {
+      "nlist": 1000, "scope": "global", "pmax": 256,
+      "nprobes": [8,16,24,32,48,64,96,128,160,192,256,384,512,768,1000],
+      "nq": 100, "loops": 1, "normalize": true, "fixed_nprobe": 160,
+      "budget_grid": [9,17,33,49,65,97,129,193,256],
+      "reference": "P256 is an untuned reference from openai3072_profile.json; no claim of measured optimality."
+    },
+    "nuswide": {
+      "nlist": 512, "scope": "global", "pmax": 8,
+      "nprobes": [1,2,3,4,5,6,8,10],
+      "nq": 200, "loops": 5, "fixed_nprobe": 3,
+      "budget_grid": [3,4,5,6,7,8],
+      "reference": "Optional dataset; historical Global scope comparison reference P8."
+    },
+    "HandOutlines": {
+      "nlist": 32, "scope": "global", "pmax": 8,
+      "nprobes": [1,2,3,4,5,7,10],
+      "nq": 370, "loops": 20, "fixed_nprobe": 4,
+      "budget_grid": [3,4,5,6,7,8],
+      "reference": "Optional dataset; fine Global scan peaks P7/P8 across repeats."
+    },
+    "glove-200-angular": {
+      "nlist": 1024, "scope": "global", "pmax": 21,
+      "nprobes": [80,96,128,192,256,384,512],
+      "nq": 200, "loops": 3, "normalize": true, "fixed_nprobe": 512,
+      "budget_grid": [3,5,9,13,17,21],
+      "reference": "Optional dataset; P21 is the historical static reference, not a finely tuned MM optimum."
+    },
+    "landmark-dino-768-cosine": {
+      "nlist": 1024, "scope": "global", "pmax": 78,
+      "nprobes": [6,7,8,12,16,24,32,64,128,256,512],
+      "nq": 200, "loops": 3, "normalize": true, "fixed_nprobe": 64,
+      "budget_grid": [5,9,17,25,33,49,65,78],
+      "reference": "Optional dataset; historical static reference P78; not a finely tuned MM optimum."
+    }
+  }
+}

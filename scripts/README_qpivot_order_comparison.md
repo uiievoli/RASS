@@ -18,6 +18,26 @@ uniform query sample; each query uses complete candidate lists without
 candidate subsampling. The default eight queries are a screening experiment;
 increase to 32 or more for a stronger query sample.
 
+For a fixed candidate pool of p=64 PCA directions, select n directions only
+from that pool and compare against the original first n directions:
+
+```bash
+python3 -u scripts/run_qpivot_order_comparison.py \
+  --log-dir logs/qpivot_fixed_pool64 \
+  --datasets sift1m dbpedia3072m_holdout \
+  --pool-directions 64 --budgets 4 8 16 24 32 40 48 56 64 \
+  --nq 32 --threads 32 --cpus 0-31 \
+  --index-root logs/qpivot_order_all11_20261017
+```
+
+The pool is exactly the original PCA rows `[0,p)`, fixed before queries are
+evaluated. MM and Greedy may not choose rows beyond p even if the persisted
+index is larger. Stored moment arrays retain their full-bank stride; candidate
+row storage and IVF membership are reused. At n=p every method selects the
+same set and must obtain the same pruning count. `--pool-directions` counts
+directions, so p=64 corresponds to the repository's Pmax=65 including center.
+`--index-root` can point to a previous experiment to reuse its `DATASET/index_cache`.
+
 All methods use the same persisted Global PCA bank. Missing banks are built
 inside the experiment's `index_cache` from an existing current-format Triangle
 index. IVF centroids, list memberships and candidate order are preserved.
