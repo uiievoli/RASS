@@ -208,6 +208,7 @@ int main(int argc,char** argv) {
         if(qpivot_curve)plans={{0,false,0,false,false,false,false,false,0,true},
                                {0,false},
                                {m,false},
+                               {m,false,0,true},
                                {m,false,2,true,false,false,false,false,1}};
         std::unique_ptr<Index> perlist;
         QueryPlanModel energy_model,mean_model;
@@ -325,7 +326,7 @@ int main(int argc,char** argv) {
                     : std::numeric_limits<double>::quiet_NaN();
                 // Derived stage totals are finalized outside the measured interval.
                 stats.summary();
-                const char* method=plan.baseline?"ivf":qpivot_curve&&!plan.p?"triangle":qpivot_curve&&!plan.dynamic?"global":qpivot_mode?"qpivot":plan.mm_policy==1?"mm_once":plan.mm_policy==2?"mm_stage_frozen_reuse":plan.mm_policy==3?"mm_stage_updated_reuse":plan.mm_policy==4?"mm_stage_updated_alloc":
+                const char* method=plan.baseline?"ivf":qpivot_curve&&!plan.p?"triangle":qpivot_curve&&!plan.dynamic?"global":qpivot_curve&&!plan.mm_policy?"dynamic":qpivot_mode?"qpivot":plan.mm_policy==1?"mm_once":plan.mm_policy==2?"mm_stage_frozen_reuse":plan.mm_policy==3?"mm_stage_updated_reuse":plan.mm_policy==4?"mm_stage_updated_alloc":
                     plan.perlist?"original_perlist_dynamic":plan.dynamic?"original_global_dynamic":plan.adaptive?(mm_policy?"mm_query_model":plan.energy?"adaptive_energy":"adaptive_mean"):
                     plan.uniform?"prefix_uniform":plan.ascending?(plan.energy?"query_energy_ascending":"moment_mean_ascending"):
                     plan.p?(plan.moments==1?"moment_separation":plan.moments==2?"moment_mean":plan.energy?"query_energy":"prefix"):"triangle";

@@ -1,9 +1,12 @@
 # Global QPivot performance rerun
 
-The recall runner compares four methods using one freshly built Global index:
+The recall runner compares five methods using one freshly built Global index:
 IVF (no pruning), Tribase (Triangle only), Global PCA (Triangle plus all M
-directions in original PCA order, no dynamic selection), and QPivot (Triangle
+directions in original PCA order, no dynamic selection), Dynamic (original
+quantity selector, PCA prefix order, block size 8, no MM), and QPivot (Triangle
 plus MM order and dynamic prefix selection). There is no per-method index build.
+The Dynamic control is the original implementation executed on this new
+Global index; it does not recreate historical per-list indexes or code versions.
 Query execution defaults to 56 parallel workers (`--query-threads 56`, alias
 `--threads 56`), with independent queries distributed across workers.
 Use `--cpus 0-55` for binding. Offline construction uses `--offline-threads`.
@@ -52,6 +55,24 @@ Query projection and MM scoring both use exactly the configured M dimensions.
 
 `--index` and `--index-root` are rejected to prevent accidental old-bank reuse.
 Both perf and stats binaries fully validate the new index before measurements.
+
+To keep exactly the profiles/Pmax from the previous parallel run, use its
+protocol. This copies configurations only; all indexes are still rebuilt:
+
+```bash
+bash scripts/run_qpivot_recall_sweep.sh \
+  --data-root /path/to/data \
+  --reference-protocol /path/to/qpivot_global_para/protocol.json \
+  --log-dir /path/to/logs/qpivot_dynamic_same_pmax \
+  --datasets all-small --cpus 0-55 --query-threads 56 \
+  --offline-threads 56 --build-jobs 16 --repeats 5
+```
+
+Do not combine this with `--pmax` or `--nlist`: the reference freezes both.
+Every method in every nprobe case must use that dataset's same persisted bank.
+The summary records Dynamic and QPivot mean pivot counts and validates both
+histograms against Pmax. Existing four-method runs can still be summarized
+using their recorded method list, including `--summarize-only --allow-partial`.
 All datasets must be under the supplied data root with the normal
 `DATASET/origin/DATASET_{base,query}.fvecs` layout.
 

@@ -61,6 +61,15 @@ def summarize(root,draw=True):
     with (root/'summary.csv').open('w',newline='') as stream:
         writer=csv.DictWriter(stream,fieldnames=list(records[0]));writer.writeheader();writer.writerows(records)
     if not draw:return
+    recall_annotations={}
+    if (root/'recall_annotations.csv').exists():
+        with (root/'recall_annotations.csv').open() as stream:
+            recall_annotations={r['dataset']:r for r in csv.DictReader(stream)}
+    def reference_label(ds):
+        r=recall_annotations.get(ds)
+        if not r:return ''
+        assert int(r['nprobe'])==int(protocol['cases'][ds]['nprobe'])
+        return f' · Reference Recall@1={float(r["recall"]):.4f}'
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -75,7 +84,7 @@ def summarize(root,draw=True):
                 points=sorted([r for r in records if r['dataset']==ds and r['method']==method],key=lambda r:r['directions'])
                 ax.plot([r['directions'] for r in points],[100*r[metric] for r in points],label=name,color=color,marker=marker)
             pool=protocol['cases'][ds].get('pool_directions',protocol['cases'][ds]['pmax']-1)
-            ax.set_title(f'{ds} · fixed pool p={pool}');ax.set_xlabel('Selected PCA directions n (pivots = n+1)');ax.set_ylabel(label);ax.grid(alpha=.2)
+            ax.set_title(f'{ds} · fixed pool p={pool}\nnprobe={protocol["cases"][ds]["nprobe"]}{reference_label(ds)}',fontsize=10);ax.set_xlabel('#pivot');ax.set_ylabel(label);ax.grid(alpha=.2)
         for ax in list(axes.flat)[len(datasets):]:ax.axis('off')
         handles,labels=axes.flat[0].get_legend_handles_labels();fig.legend(handles,labels,loc='upper center',ncol=3,frameon=False)
         fig.tight_layout(rect=(0,0,1,.96))
@@ -87,10 +96,10 @@ def summarize(root,draw=True):
             for method,(name,color,marker) in methods.items():
                 points=sorted([r for r in records if r['dataset']==ds and r['method']==method],key=lambda r:r['directions'])
                 ax.plot([r['directions'] for r in points],[100*r[metric] for r in points],label=name,color=color,marker=marker)
-            ax.set_xlabel('Selected PCA directions L');ax.set_ylabel('Prune rate (%)');ax.grid(alpha=.2)
+            ax.set_xlabel('#pivot');ax.set_ylabel('Prune rate (%)');ax.grid(alpha=.2)
             ax.set_title('Among Triangle survivors' if metric.startswith('conditional') else 'Overall, including Triangle')
         pool=protocol['cases'][ds].get('pool_directions',protocol['cases'][ds]['pmax']-1)
-        fig.suptitle(ds+f' · select n from fixed PCA pool p={pool}',fontweight='bold')
+        fig.suptitle(ds+f' · select n from fixed PCA pool p={pool}\nnprobe={protocol["cases"][ds]["nprobe"]}{reference_label(ds)}',fontweight='bold')
         axes[0].legend(frameon=False);fig.tight_layout()
         for ext in ['png','pdf']:fig.savefig(figures/f'{ds}.{ext}',dpi=180,bbox_inches='tight')
         plt.close(fig)

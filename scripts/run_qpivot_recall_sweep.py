@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run parallel IVF/Tribase/Global/QPivot sweeps on one fresh Global PCA index."""
+"""Run parallel IVF/Tribase/Global/Dynamic/QPivot sweeps on one fresh Global PCA index."""
 import argparse
 import csv
 import json
@@ -15,7 +15,7 @@ from qpivot_index_setup import prepare_global_index
 from qpivot_profiles import CONFIG, DEFAULT_CONFIG, PROFILES, load_profiles
 
 ROOT = Path(__file__).resolve().parents[1]
-METHODS = ('ivf', 'triangle', 'global', 'qpivot')
+METHODS = ('ivf', 'triangle', 'global', 'dynamic', 'qpivot')
 
 
 def run(command, log, env, prefix=()):
@@ -76,7 +76,7 @@ def read(path):
     with path.open(newline='') as stream: return list(csv.DictReader(stream))
 
 
-def write_summary(root, datasets, profiles, repeats):
+def write_summary(root, datasets, profiles, repeats, methods=METHODS):
     summary = []
     for dataset in datasets:
         cfg = profiles[dataset]
@@ -84,7 +84,7 @@ def write_summary(root, datasets, profiles, repeats):
             case = root/dataset/f'nprobe{nprobe}'
             perf, stats = read(case/'perf.csv'), read(case/'stats.csv')
             hist = read(case/'stats.csv.budgets.csv')
-            for method in METHODS:
+            for method in methods:
                 timed = [row for row in perf if row['method'] == method]
                 profiled = [row for row in stats if row['method'] == method]
                 if len(timed) != repeats or len(profiled) != 1:
@@ -107,10 +107,12 @@ def write_summary(root, datasets, profiles, repeats):
                     if sum(int(row['list_visits']) for row in selected)!=cfg['nq']*nprobe or any(
                         int(row['native_pivots'])!=cfg['pmax'] for row in selected):
                         raise ValueError('Global static pivot histogram mismatch')
-                if method == 'qpivot':
+                if method in ('qpivot','dynamic'):
                     selected = [row for row in hist if row['method'] == method]
                     visits = sum(int(row['list_visits']) for row in selected)
-                    if visits != cfg['nq'] * nprobe: raise ValueError('QPivot histogram mismatch')
+                    if visits != cfg['nq'] * nprobe: raise ValueError(f'{method} histogram mismatch')
+                    if any(int(row['native_pivots'])>cfg['pmax'] for row in selected):
+                        raise ValueError(f'{method} selected pivots outside the persisted bank')
                     mean_p = sum(int(row['native_pivots'])*int(row['list_visits']) for row in selected)/visits
                 summary.append(dict(dataset=dataset, method=method, nprobe=nprobe,
                     recall=recalls[0], median_latency_ms=np.median(times),
@@ -128,11 +130,32 @@ def write_summary(root, datasets, profiles, repeats):
     return summary
 
 
+def complete_partial_profiles(root,protocol):
+    profiles={};audit={}
+    for ds in protocol['datasets']:
+        cfg=dict(protocol['profiles'][ds]);done=[];missing=[]
+        for n in cfg['nprobes']:
+            case=root/ds/f'nprobe{n}'
+            try:
+                perf,stats=read(case/'perf.csv'),read(case/'stats.csv')
+                valid=all(sum(r['method']==m for r in perf)==protocol['repeats'] and
+                          sum(r['method']==m for r in stats)==1 for m in protocol.get('methods',METHODS))
+                valid=valid and (case/'stats.csv.budgets.csv').is_file()
+            except (OSError,KeyError,csv.Error):valid=False
+            (done if valid else missing).append(n)
+        audit[ds]=dict(completed_nprobes=done,missing_or_incomplete_nprobes=missing)
+        if done:cfg['nprobes']=done;profiles[ds]=cfg
+    (root/'partial_status.json').write_text(json.dumps(audit,indent=2)+'\n')
+    if not profiles:raise ValueError('no complete nprobe cases')
+    return profiles
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-root',required=True,type=Path)
     parser.add_argument('--log-dir',required=True,type=Path)
     parser.add_argument('--config',type=Path,default=DEFAULT_CONFIG,help='shared Global performance profile JSON')
+    parser.add_argument('--reference-protocol',type=Path,help='freeze dataset profiles/Pmax to a previous recall run; does not reuse its indexes or measurements')
     parser.add_argument('--datasets',nargs='+',help='dataset names, all (default seven), or all-small (all eleven non-1B)')
     parser.add_argument('--show-config',action='store_true',help='print resolved profiles without building/running')
     parser.add_argument('--index',type=Path,help='single dataset only')
@@ -148,15 +171,24 @@ def main():
     parser.add_argument('--build-jobs',type=int,default=8)
     parser.add_argument('--build-root',type=Path,default=ROOT/'build-qpivot')
     parser.add_argument('--skip-build',action='store_true');parser.add_argument('--summarize-only',action='store_true')
+    parser.add_argument('--allow-partial',action='store_true',help='summarize-only: plot completed nprobe cases, recording omitted cases')
     parser.add_argument('--cmake-arg',action='append',default=[])
     args=parser.parse_args();out=args.log_dir.resolve()
     if args.summarize_only:
         protocol=json.loads((out/'protocol.json').read_text());profiles=protocol['profiles'];datasets=protocol['datasets']
-        write_summary(out,datasets,profiles,protocol['repeats'])
+        if args.allow_partial:profiles=complete_partial_profiles(out,protocol);datasets=list(profiles)
+        write_summary(out,datasets,profiles,protocol['repeats'],protocol.get('methods',METHODS))
         env=dict(os.environ,MPLCONFIGDIR=str(out/'.matplotlib'))
         subprocess.run([sys.executable,ROOT/'scripts/plot_qpivot_recall.py','--root',out,
                         '--recall-min',str(args.recall_min)],check=True,env=env);return
     configuration=load_profiles(args.config)
+    if args.reference_protocol:
+        prior=json.loads(args.reference_protocol.read_text())
+        if prior.get('multipivot_scope')!='global' or 'profiles' not in prior:
+            parser.error('reference-protocol must describe a Global recall sweep')
+        if args.pmax is not None or args.nlist is not None:
+            parser.error('reference-protocol freezes Pmax/nlist; do not supply --pmax/--nlist')
+        configuration=dict(version=prior.get('config_version',2),default_datasets=prior['datasets'],datasets=prior['profiles'])
     if not args.datasets or args.datasets==['all']:args.datasets=configuration['default_datasets']
     elif args.datasets==['all-small']:args.datasets=list(configuration['datasets'])
     if len(set(args.datasets))!=len(args.datasets) or any(ds not in configuration['datasets'] for ds in args.datasets):
@@ -196,6 +228,8 @@ def main():
                   multipivot_scope='global',query_threads=args.query_threads,methods=list(METHODS),resolved_indexes={},
                   timing_semantics='parallel batch wall time / total queries; QPS is aggregate throughput',
                   global_policy='all persisted directions, original PCA order, no dynamic count or order',
+                  dynamic_policy='original Global dynamic quantity selector, PCA prefix order, block size 8, no MM scoring',
+                  reference_protocol=str(args.reference_protocol.resolve()) if args.reference_protocol else None,
                   index_policy='fresh Global PCA from base vectors; shared by every method and nprobe',
                   qpivot_policy='reorder/select only the persisted Pmax-1 directions; no basis replacement')
     (out/'protocol.json').write_text(json.dumps(protocol,indent=2)+'\n')
