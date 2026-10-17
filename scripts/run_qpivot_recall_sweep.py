@@ -21,8 +21,13 @@ PROFILES = {
     'glove25': dict(nlist=1024, pmax=26, nprobes=[10,15,20,25,30,35,40,45,50,60,80], nq=1000, loops=3),
     'StarLightCurves': dict(nlist=128, pmax=104, nprobes=[1,2,3,4,5,6,8,10,12], nq=823, loops=5),
     'dbpedia1536m_holdout': dict(nlist=1000, pmax=257, nprobes=[20,30,40,60,80,100,120,140,160,200], nq=200, loops=1),
+    'dbpedia3072m_holdout': dict(nlist=1000, pmax=512,
+        nprobes=[8,16,24,32,48,64,96,128,160,192,256,384,512,768,1000],
+        nq=100, loops=1, normalize=True),
 }
 METHODS = ('ivf', 'triangle', 'qpivot')
+INDEX_MAGIC = b'TRIBASE2'
+INDEX_VERSION = 10
 
 
 def run(command, log, env, prefix=()):
@@ -79,15 +84,39 @@ def groundtruth_prefix(source, destination, nq, source_queries):
         out.write(struct.pack('<II', nq, 1)); out.write(struct.pack(f'<{nq}i', *ids))
 
 
-def find_index(directory, nlist):
+def current_index(path):
+    try:
+        with path.open('rb') as stream:
+            return stream.read(8) == INDEX_MAGIC and struct.unpack('<I', stream.read(4))[0] == INDEX_VERSION
+    except (OSError, struct.error):
+        return False
+
+
+def find_source_index(directory, nlist, normalize=False):
     candidates = list(directory.glob(
         f'v*_nlist_{nlist}_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_*_P0_seed*.index'))
     candidates += list(directory.glob(f'recall_shared_v2_nlist_{nlist}_*_triangle.index'))
+    if normalize:
+        candidates += list(directory.glob('shared_unit_triangle.index'))
+    candidates = [path for path in candidates if ('unit' in path.name)==normalize]
+    candidates = [path for path in candidates if current_index(path)]
     if not candidates: return None
     def key(path):
         match = re.match(r'v(\d+)_', path.name)
         return (int(match.group(1)) if match else 1000, path.stat().st_mtime_ns)
     return max(candidates, key=key)
+
+
+def find_rich_index(directory, nlist, pmax, normalize=False):
+    candidates = list(directory.glob(
+        f'*nlist_{nlist}_*mp_global_pca_P{pmax}_seed0*.index'))
+    candidates += list(directory.glob(
+        f'*nlist{nlist}*global*pca*P{pmax}*.index'))
+    candidates = list(dict.fromkeys(path for path in candidates
+                                    if '.partial' not in path.name and current_index(path)
+                                    and ('unit' in path.name)==normalize))
+    if not candidates: return None
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
 
 
 def read(path):
@@ -183,32 +212,44 @@ def main():
             run(['cmake','-S',ROOT,'-B',directory,'-DCMAKE_BUILD_TYPE=Release',
                  f'-DENABLE_STATS={"ON" if phase=="stats" else "OFF"}','-DENABLE_LTO=OFF',*args.cmake_arg],
                 out/f'configure_{phase}.log',env,prefix)
-            run(['cmake','--build',directory,'--target','benchmark_query_energy','build_global_pca_dictionary',
+            run(['cmake','--build',directory,'--target','benchmark_query_energy','build_global_pca_index',
                  '-j',args.build_jobs],out/f'build_{phase}.log',env,prefix)
     protocol=dict(experiment='QPivot recall sweep',datasets=args.datasets,profiles=profiles,repeats=args.repeats,
-                  query_threads=1,methods=list(METHODS))
+                  multipivot_scope='global',query_threads=1,methods=list(METHODS))
     (out/'protocol.json').write_text(json.dumps(protocol,indent=2)+'\n')
     for dataset in args.datasets:
         cfg=profiles[dataset];source=args.data_root.resolve()
         if source.name!=dataset:source/=dataset
         query_source=(args.query or source/'origin'/f'{dataset}_query.fvecs').resolve()
-        gt_source=(args.groundtruth or source/'result'/'groundtruth_1.bin').resolve()
-        index=args.index.resolve() if args.index else find_index(source/'index',cfg['nlist'])
-        if not query_source.is_file() or not gt_source.is_file() or index is None or not index.is_file():
-            raise ValueError(f'missing query/groundtruth/P0 Triangle index for {dataset}')
-        directory=out/dataset;directory.mkdir()
-        query=directory/'queries.fvecs';d,source_nq=copy_query_prefix(query_source,query,cfg['nq'])
+        normalize=cfg.get('normalize',False)
+        unit_tag='_unit' if normalize else ''
+        gt_source=(args.groundtruth or source/'result'/f'groundtruth_1{unit_tag}.bin').resolve()
+        if not query_source.is_file() or not gt_source.is_file():
+            raise ValueError(f'missing query/groundtruth for {dataset}')
+        d,source_nq,_=fvecs_info(query_source)
         if cfg['pmax']>min(d+1,512):raise ValueError(f'{dataset}: Pmax exceeds D+1/512')
+        if cfg['nq']>source_nq:raise ValueError(f'{dataset}: nq exceeds available queries')
+        index_dir=source/'index';index_dir.mkdir(parents=True,exist_ok=True)
+        index=args.index.resolve() if args.index else find_rich_index(index_dir,cfg['nlist'],cfg['pmax'],normalize)
+        if index is None:
+            source_index=find_source_index(index_dir,cfg['nlist'],normalize)
+            if source_index is None:
+                raise ValueError(f'missing reusable P0 Triangle index for {dataset}')
+            index=index_dir/f'qpivot_v10_nlist_{cfg["nlist"]}{unit_tag}_mp_global_pca_P{cfg["pmax"]}_seed0.index'
+            run([build/'perf/bin/build_global_pca_index',source_index,index,cfg['pmax']],
+                out/f'build_index_{dataset}.log',env,prefix)
+        if not index.is_file():raise ValueError(f'missing rich Global PCA index for {dataset}')
+        directory=out/dataset;directory.mkdir()
+        query=directory/'queries.fvecs';copy_query_prefix(query_source,query,cfg['nq'])
         groundtruth=directory/'groundtruth.i32bin';groundtruth_prefix(gt_source,groundtruth,cfg['nq'],source_nq)
-        dictionary=directory/'dictionary.bin'
-        run([build/'perf/bin/build_global_pca_dictionary',index,dictionary,cfg['pmax']-1],
-            directory/'dictionary.log',env,prefix)
+        dataset_env=dict(env,TRIBASE_PROJECTION_MOMENTS=str(directory/'projection_moments.bin'))
+        dataset_env['TRIBASE_NORMALIZE_QUERIES']='1' if normalize else '0'
         for nprobe in cfg['nprobes']:
             case=directory/f'nprobe{nprobe}';case.mkdir()
             for phase,repeats,loops in [('stats',1,1),('perf',args.repeats,cfg['loops'])]:
-                run([build/phase/'bin/benchmark_query_energy',index,query,dictionary,case/f'{phase}.csv',
+                run([build/phase/'bin/benchmark_query_energy',index,query,'-',case/f'{phase}.csv',
                      cfg['nq'],repeats,loops,1,'qpivot_curve',nprobe,1,'-','-',groundtruth],
-                    case/f'{phase}.log',env,prefix)
+                    case/f'{phase}.log',dataset_env,prefix)
     write_summary(out,args.datasets,profiles,args.repeats)
     plot_env=dict(os.environ,MPLCONFIGDIR=str(out/'.matplotlib'))
     subprocess.run([sys.executable,ROOT/'scripts/plot_qpivot_recall.py','--root',out,

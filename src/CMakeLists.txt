@@ -37,6 +37,8 @@ target_link_libraries(export_pivot_subsets Tribase faiss)
 
 add_executable(query_subset_oracle query_subset_oracle.cpp)
 target_link_libraries(query_subset_oracle Tribase faiss)
+add_executable(qpivot_regret_eval qpivot_regret_eval.cpp)
+target_link_libraries(qpivot_regret_eval Tribase faiss)
 add_executable(query_score_gap query_score_gap.cpp)
 target_link_libraries(query_score_gap Tribase faiss)
 
@@ -45,6 +47,9 @@ target_link_libraries(benchmark_query_energy Tribase faiss)
 
 add_executable(build_global_pca_dictionary build_global_pca_dictionary.cpp)
 target_link_libraries(build_global_pca_dictionary Tribase faiss)
+
+add_executable(build_global_pca_index build_global_pca_index.cpp)
+target_link_libraries(build_global_pca_index Tribase faiss)
 
 add_executable(prune_comparison prune_comparison.cpp)
 target_link_libraries(prune_comparison Tribase faiss)

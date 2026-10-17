@@ -21,7 +21,7 @@ struct Plan {size_t p;bool energy;int moments=0;bool dynamic=false,adaptive=fals
 
 int main(int argc,char** argv) {
     try {
-        if(argc<9||argc>15)throw std::invalid_argument("Usage: benchmark_query_energy INDEX QUERIES DICTIONARY OUTPUT NQ REPEATS LOOPS THREADS [moments|calibrate|adaptive|scan_order|mm_policy|mm_compare|qpivot|qpivot_curve [NPROBE [BUDGETS_CSV [MODEL_OR_DASH PERLIST_OR_DASH [GROUNDTRUTH.i32bin|ivecs]]]]]");
+        if(argc<9||argc>15)throw std::invalid_argument("Usage: benchmark_query_energy INDEX QUERIES DICTIONARY_OR_DASH OUTPUT NQ REPEATS LOOPS THREADS [moments|calibrate|adaptive|scan_order|mm_policy|mm_compare|qpivot|qpivot_curve [NPROBE [BUDGETS_CSV [MODEL_OR_DASH PERLIST_OR_DASH [GROUNDTRUTH.i32bin|ivecs]]]]] (QPivot requires DICTIONARY_OR_DASH=- and a rich Global PCA index)");
         const bool with_moments=argc>=10;
         const std::string mode=with_moments?argv[9]:"energy";
         const bool calibrate=mode=="calibrate",adaptive=mode=="adaptive",scan_order=mode=="scan_order";
@@ -60,47 +60,86 @@ int main(int argc,char** argv) {
             throw std::invalid_argument("expected L2 source with Triangle metadata and valid nprobe");
         auto [queries,available,d]=loadXvecs(argv[2]);
         if(size_t(d)!=index.d||nq>size_t(available))throw std::invalid_argument("query mismatch");
+        if(const char* normalize=std::getenv("TRIBASE_NORMALIZE_QUERIES");
+           normalize&&std::string(normalize)=="1") {
+            normalizeL2InPlace(queries.get(),nq,index.d);
+            std::cout<<"Normalized query vectors for unit-sphere L2 index"<<std::endl;
+        }
         ExternalGroundTruth groundtruth;
         if(argc==15)groundtruth=load_external_groundtruth(argv[14],nq);
-        const size_t bytes=std::filesystem::file_size(argv[3]);
-        if(bytes%(index.d*sizeof(double)))throw std::invalid_argument("dictionary shape mismatch");
-        const size_t rows=bytes/(index.d*sizeof(double));
-        if(rows<2||rows>index.d+1||rows>MULTIPIVOT_MAX_PIVOTS)throw std::invalid_argument("invalid dictionary dimensions");
-        const size_t m=rows-1;
+        // QPivot is a search policy over the PCA coordinates already persisted in
+        // a rich Global-PCA index.  It must not install another basis or rebuild
+        // candidate projections at benchmark start: doing so would measure a
+        // different index from the one being evaluated.  Legacy selector
+        // experiments still accept an external frozen dictionary.
+        const bool use_persisted_dictionary=qpivot_mode;
+        size_t m=0;
+        if(use_persisted_dictionary) {
+            if(std::string(argv[3])!="-")
+                throw std::invalid_argument("QPivot requires DICTIONARY=- and uses the loaded index PCA bank");
+            if(index.multipivot_scope!=MultiPivotScope::GLOBAL||index.multipivot_method!="pca"||
+               index.signature_precision!=SignaturePrecision::FLOAT32||index.global_pivots.count<2||
+               index.global_pivots.count!=index.multipivot_built_count||
+               !index.global_pivots.has_U(index.global_pivots.count))
+                throw std::invalid_argument("QPivot requires a rich Global float32 PCA Pmax index");
+            m=index.global_pivots.count-1;
+            for(size_t lid=0;lid<index.nlist;++lid) {
+                const auto& list=index.lists[lid];
+                if(!list.list_size)continue;
+                if(!list.pivots.external_projection_geometry||
+                   list.pivots.count!=index.global_pivots.count||
+                   !list.pivots.usable_signature(index.global_pivots.count)||
+                   list.pivots.candidate_centroid_squared.size()!=list.list_size)
+                    throw std::invalid_argument("QPivot index has missing or incompatible persisted candidate signatures");
+            }
+            std::cout<<"Using persisted Global PCA bank and candidate signatures: Pmax="
+                     <<index.global_pivots.count<<" directions="<<m<<std::endl;
+        } else {
+            const size_t bytes=std::filesystem::file_size(argv[3]);
+            if(bytes%(index.d*sizeof(double)))throw std::invalid_argument("dictionary shape mismatch");
+            const size_t rows=bytes/(index.d*sizeof(double));
+            if(rows<2||rows>index.d+1||rows>MULTIPIVOT_MAX_PIVOTS)
+                throw std::invalid_argument("invalid dictionary dimensions");
+            m=rows-1;
+            std::vector<double> raw((m+1)*index.d);
+            std::ifstream input(argv[3],std::ios::binary);
+            input.read(reinterpret_cast<char*>(raw.data()),raw.size()*sizeof(double));
+            if(!input)throw std::runtime_error("cannot read dictionary");
+            PivotMetadata geometry;geometry.d=index.d;geometry.count=geometry.requested_count=m+1;
+            geometry.rank=m;geometry.condition=1;geometry.codes.resize(index.d);geometry.U.resize(m*index.d);
+            std::copy_n(raw.begin(),index.d,geometry.codes.begin());
+            std::copy(raw.begin()+index.d,raw.end(),geometry.U.begin());
+            index.configure_multipivot(MultiPivotScope::GLOBAL,"pca",m+1,0);
+            index.global_pivots=std::move(geometry);
+            const Eigen::Map<const Matrix> basis(index.global_pivots.U.data(),m,index.d);
+            Eigen::setNbThreads(1);
+            std::cout<<"Installing frozen dictionary and float32 SoA signatures in memory"<<std::endl;
+            omp_set_num_threads(offline_threads);
+#pragma omp parallel for schedule(dynamic,1)
+            for(size_t lid=0;lid<index.nlist;++lid) {
+                auto& list=index.lists[lid];const size_t n=list.list_size;
+                Matrix centered(n,index.d);
+                PivotMetadata meta;meta.d=index.d;meta.count=meta.requested_count=m+1;meta.rank=m;meta.condition=1;
+                meta.external_projection_geometry=true;meta.signature_candidate_count=n;
+                meta.signature_data.resize((m+1)*n);meta.candidate_centroid_squared.resize(n);
+                for(size_t i=0;i<n;++i) {
+                    double norm=0;for(size_t a=0;a<index.d;++a){double delta=double(list.get_candidate_codes()[i*index.d+a])-index.global_pivots.codes[a];centered(i,a)=float(delta);norm+=delta*delta;}
+                    meta.candidate_centroid_squared[i]=float(norm);
+                }
+                Eigen::Map<Matrix> destination(meta.signature_data.data(),m,n);
+                destination.noalias()=basis*centered.transpose();
+                for(size_t i=0;i<n;++i){float energy=0;for(size_t j=0;j<m;++j){float z=meta.signature_data[j*n+i];energy+=z*z;}
+                    meta.signature_data[m*n+i]=std::sqrt(std::max(0.f,meta.candidate_centroid_squared[i]-energy));}
+                list.pivots=std::move(meta);
+            }
+        }
         if(budgets.empty())throw std::invalid_argument("empty budgets");
         for(size_t p:budgets)if(!p||p>=m)throw std::invalid_argument("budget must be in [1,M), full prefix is added separately");
-        std::vector<double> raw((m+1)*index.d);
-        std::ifstream input(argv[3],std::ios::binary);input.read(reinterpret_cast<char*>(raw.data()),raw.size()*sizeof(double));
-        if(!input)throw std::runtime_error("cannot read dictionary");
-        PivotMetadata geometry;geometry.d=index.d;geometry.count=geometry.requested_count=m+1;
-        geometry.rank=m;geometry.condition=1;geometry.codes.resize(index.d);geometry.U.resize(m*index.d);
-        std::copy_n(raw.begin(),index.d,geometry.codes.begin());
-        std::copy(raw.begin()+index.d,raw.end(),geometry.U.begin());
-        index.configure_multipivot(MultiPivotScope::GLOBAL,"pca",m+1,0);
-        index.global_pivots=std::move(geometry);
-        const Eigen::Map<const Matrix> basis(index.global_pivots.U.data(),m,index.d);
-        Eigen::setNbThreads(1);
-        std::cout<<"Installing frozen dictionary and float32 SoA signatures in memory"<<std::endl;
-        omp_set_num_threads(offline_threads);
-#pragma omp parallel for schedule(dynamic,1)
-        for(size_t lid=0;lid<index.nlist;++lid) {
-            auto& list=index.lists[lid];const size_t n=list.list_size;
-            Matrix centered(n,index.d);
-            PivotMetadata meta;meta.d=index.d;meta.count=meta.requested_count=m+1;meta.rank=m;meta.condition=1;
-            meta.external_projection_geometry=true;meta.signature_candidate_count=n;
-            meta.signature_data.resize((m+1)*n);meta.candidate_centroid_squared.resize(n);
-            for(size_t i=0;i<n;++i) {
-                double norm=0;for(size_t a=0;a<index.d;++a){double delta=double(list.get_candidate_codes()[i*index.d+a])-index.global_pivots.codes[a];centered(i,a)=float(delta);norm+=delta*delta;}
-                meta.candidate_centroid_squared[i]=float(norm);
-            }
-            Eigen::Map<Matrix> destination(meta.signature_data.data(),m,n);
-            destination.noalias()=basis*centered.transpose();
-            for(size_t i=0;i<n;++i){float energy=0;for(size_t j=0;j<m;++j){float z=meta.signature_data[j*n+i];energy+=z*z;}
-                meta.signature_data[m*n+i]=std::sqrt(std::max(0.f,meta.candidate_centroid_squared[i]-energy));}
-            list.pivots=std::move(meta);
-        }
         if(with_moments) {
-          const auto sidecar=std::filesystem::path(argv[4]).parent_path()/"projection_moments.bin";
+          const char* moments_env=std::getenv("TRIBASE_PROJECTION_MOMENTS");
+          const auto sidecar=moments_env&&*moments_env
+              ? std::filesystem::path(moments_env)
+              : std::filesystem::path(argv[4]).parent_path()/"projection_moments.bin";
           if(std::filesystem::exists(sidecar)) {
             index.load_projection_moments(sidecar.string());
             std::cout<<"Loaded offline list moments "<<sidecar<<std::endl;
@@ -178,9 +217,12 @@ int main(int argc,char** argv) {
             auto& target=*selected_index;
             target.projection_query_energy=plan.energy;target.projection_moment_score=plan.moments;
             target.projection_scan_ascending=plan.ascending;target.projection_uniform_prefix=plan.uniform;
-            target.collect_projection_orders=scan_order;
+            // The stats build records QPivot's chosen rows so an experiment can
+            // verify that a small budget really selects from the complete
+            // persisted PCA bank rather than only permuting PCA[0:L].
+            target.collect_projection_orders=scan_order||qpivot_mode;
             target.projection_mm_dynamic=plan.mm_policy!=0;
-            target.projection_order_within_active_prefix=qpivot_mode;
+            target.projection_allow_budget_cap=qpivot_mode;
             target.projection_reuse_workspace=plan.mm_policy==2||plan.mm_policy==3;
             target.projection_progressive=plan.mm_policy==2?1:plan.mm_policy>=3?2:0;
             target.projection_progressive_keep_exploration=plan.mm_policy!=0;

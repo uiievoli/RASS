@@ -109,6 +109,46 @@ TEST(QueryEnergy, PersistedMomentsPreserveResultsAndRejectStaleData) {
     EXPECT_THROW(index.search(nq,queries.data(),1,distances.data(),ids.data()),std::invalid_argument);
 }
 
+TEST(QueryEnergy, CappedDynamicOrderSelectsFromCompletePersistedBank) {
+    using namespace tribase;
+    constexpr size_t nb=513,nq=8,d=20,nlist=16,built_p=13,active_p=3;
+    auto base=randomVectors(nb,d,1404),queries=randomVectors(nq,d,1405);
+    Index index(d,nlist,nlist,METRIC_L2,OPT_TRIANGLE,0,1,1,false);
+    index.configure_multipivot(MultiPivotScope::GLOBAL,"pca",built_p,0);
+    index.train(nb,base.data());index.add(nb,base.data());index.build_projection_moments();
+
+    // Force the last stored PCA row to win the MM score.  Since active_p only
+    // admits two directions, observing row built_p-2 proves selection is over
+    // the complete stored bank rather than the canonical PCA[0:2] prefix.
+    for(size_t lid=0;lid<nlist;++lid)
+        index.projection_list_means[lid*(built_p-1)+(built_p-2)]=1.0e6;
+    index.projection_moment_score=2;
+    index.projection_dynamic=true;
+    index.projection_mm_dynamic=true;
+    index.projection_block_size=2;
+    index.projection_allow_budget_cap=true;
+    index.collect_projection_orders=true;
+    index.set_multipivot_search(MultiPivotMode::PROJECTION,active_p);
+
+    std::vector<idx_t> expected(nq),actual(nq);
+    std::vector<float> expected_distances(nq),actual_distances(nq);
+    index.projection_moment_score=0;index.projection_dynamic=false;index.projection_mm_dynamic=false;
+    index.set_multipivot_search(MultiPivotMode::NONE,0);
+    index.search(nq,queries.data(),1,expected_distances.data(),expected.data());
+    index.projection_moment_score=2;index.projection_dynamic=true;index.projection_mm_dynamic=true;
+    index.set_multipivot_search(MultiPivotMode::PROJECTION,active_p);
+    auto stats=index.search(nq,queries.data(),1,actual_distances.data(),actual.data());
+    expectSameResults(expected,expected_distances,actual,actual_distances);
+#ifdef TRIBASE_ENABLE_STATS
+    ASSERT_EQ(stats.query_direction_orders.size(),nq);
+    for(const auto& choice:stats.query_direction_orders) {
+        ASSERT_EQ(choice.directions.size(),active_p-1);
+        EXPECT_NE(std::find(choice.directions.begin(),choice.directions.end(),built_p-2),
+                  choice.directions.end());
+    }
+#endif
+}
+
 TEST(QueryEnergy, ScanOrderAndUniformPrefixPreserveResultsAndSubsets) {
     using namespace tribase;
     constexpr size_t nb=513,nq=20,d=24,nlist=24;

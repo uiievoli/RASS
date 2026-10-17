@@ -21,7 +21,12 @@ DEFAULTS = {
     'glove25': dict(nlist=1024, nprobe=50, pmax=[3, 5, 7, 9, 13, 17, 21, 26], nq=32, loops=10),
     'StarLightCurves': dict(nlist=128, nprobe=4, pmax=[5, 9, 17, 25, 33, 49, 65, 81, 104], nq=32, loops=30),
     'dbpedia1536m_holdout': dict(nlist=1000, nprobe=160, pmax=[9, 17, 33, 49, 65, 97, 129, 193, 257], nq=20, loops=1),
+    'dbpedia3072m_holdout': dict(nlist=1000, nprobe=160,
+        pmax=[9,17,33,49,65,97,129,193,257,321,385,449,512],
+        nq=20, loops=1, normalize=True),
 }
+INDEX_MAGIC = b'TRIBASE2'
+INDEX_VERSION = 10
 
 
 def run(command, log, env, prefix=()):
@@ -58,9 +63,21 @@ def sample_queries(source, output, nq, seed):
     return d, ids
 
 
-def find_index(directory, nlist):
+def current_index(path):
+    try:
+        with path.open('rb') as stream:
+            return stream.read(8) == INDEX_MAGIC and struct.unpack('<I', stream.read(4))[0] == INDEX_VERSION
+    except (OSError, struct.error):
+        return False
+
+
+def find_source_index(directory, nlist, normalize=False):
     candidates = list(directory.glob(
         f'v*_nlist_{nlist}_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_*_P0_seed*.index'))
+    if normalize:
+        candidates += list(directory.glob('shared_unit_triangle.index'))
+    candidates = [path for path in candidates if current_index(path)
+                  and ('unit' in path.name)==normalize]
     if not candidates:
         return None
     def key(path):
@@ -68,6 +85,17 @@ def find_index(directory, nlist):
         return (int(version.group(1)) if version else -1,
                 path.name.endswith('_P0_seed0.index'), path.stat().st_mtime_ns)
     return max(candidates, key=key)
+
+
+def find_rich_index(directory, nlist, pmax, normalize=False):
+    candidates = list(directory.glob(
+        f'*nlist_{nlist}_*mp_global_pca_P{pmax}_seed0*.index'))
+    candidates += list(directory.glob(
+        f'*nlist{nlist}*global*pca*P{pmax}*.index'))
+    candidates = list(dict.fromkeys(path for path in candidates
+                                    if '.partial' not in path.name and current_index(path)
+                                    and ('unit' in path.name)==normalize))
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns) if candidates else None
 
 
 def rows(path):
@@ -179,9 +207,11 @@ def main():
     if dataset_dir.name != args.dataset:
         dataset_dir /= args.dataset
     query_source = (args.query or dataset_dir/'origin'/f'{args.dataset}_query.fvecs').resolve()
-    index = args.index.resolve() if args.index else find_index(dataset_dir/'index', config['nlist'])
+    normalize=config.get('normalize',False)
+    index_dir = dataset_dir/'index'; index_dir.mkdir(parents=True, exist_ok=True)
+    index = args.index.resolve() if args.index else find_rich_index(
+        index_dir, config['nlist'], pmax_values[-1], normalize)
     if not query_source.is_file(): parser.error(f'missing query {query_source}')
-    if index is None or not index.is_file(): parser.error('missing reusable P0 Triangle index; pass --index')
     d, available, _ = vector_info(query_source)
     if pmax_values[-1] > min(d+1, 512):
         parser.error(f'Pmax exceeds min(D+1,512)={min(d+1,512)}')
@@ -192,6 +222,7 @@ def main():
                OMP_PROC_BIND='close', OMP_PLACES='cores', OPENBLAS_NUM_THREADS='1',
                MKL_NUM_THREADS='1', OMP_WAIT_POLICY='PASSIVE',
                TRIBASE_OFFLINE_THREADS=str(args.offline_threads))
+    env['TRIBASE_NORMALIZE_QUERIES']='1' if normalize else '0'
     env.pop('TRIBASE_TRACE', None); env.pop('EDGE_DEVICE_ENABLED', None)
     prefix = ['taskset', '-c', args.cpus] if args.cpus else []
     build_root = args.build_root.resolve()
@@ -202,21 +233,29 @@ def main():
                  f'-DENABLE_STATS={"ON" if phase == "stats" else "OFF"}',
                  '-DENABLE_LTO=OFF', *args.cmake_arg], out/f'configure_{phase}.log', env, prefix)
             run(['cmake', '--build', build, '--target', 'benchmark_query_energy',
-                 'build_global_pca_dictionary', '-j', args.build_jobs], out/f'build_{phase}.log', env, prefix)
+                 'build_global_pca_index', '-j', args.build_jobs], out/f'build_{phase}.log', env, prefix)
+    if index is None:
+        source_index = find_source_index(index_dir, config['nlist'], normalize)
+        if source_index is None:
+            parser.error('missing reusable P0 Triangle index needed to build Global PCA Pmax')
+        index = index_dir / (
+            f'qpivot_v10_nlist_{config["nlist"]}{"_unit" if normalize else ""}_mp_global_pca_'
+            f'P{pmax_values[-1]}_seed0.index')
+        run([build_root/'perf/bin/build_global_pca_index', source_index, index,
+             pmax_values[-1]], out/'build_index.log', env, prefix)
+    if not index.is_file(): parser.error('missing rich Global PCA Pmax index; pass --index')
     query = out/'queries.fvecs'
     _, ids = sample_queries(query_source, query, config['nq'], args.seed)
-    dictionary = out/'dictionary_max.bin'
-    run([build_root/'perf/bin/build_global_pca_dictionary', index, dictionary, pmax_values[-1]-1],
-        out/'dictionary.log', env, prefix)
     protocol = dict(experiment='QPivot', definition='dynamic pivot count + MM dynamic pivot order',
         configuration=dict(dataset=args.dataset, dimension=d, nlist=config['nlist'], nprobe=config['nprobe'],
                            pmax=pmax_values, nq=config['nq'], loops=config['loops'], repeats=args.repeats,
-                           seed=args.seed, query_ids=ids), index=str(index), query_source=str(query_source),
-        dictionary=str(dictionary), query_threads=1, offline_threads=args.offline_threads)
+                           seed=args.seed, query_ids=ids, multipivot_scope='global', normalize=normalize),
+        index=str(index), query_source=str(query_source),
+        dictionary='persisted in rich index', query_threads=1, offline_threads=args.offline_threads)
     (out/'protocol.json').write_text(json.dumps(protocol, indent=2, ensure_ascii=False)+'\n')
     budgets = ','.join(str(p-1) for p in pmax_values[:-1])
     for phase, repeats, loops in [('stats', 1, 1), ('perf', args.repeats, config['loops'])]:
-        run([build_root/phase/'bin/benchmark_query_energy', index, query, dictionary,
+        run([build_root/phase/'bin/benchmark_query_energy', index, query, '-',
              out/f'{phase}.csv', config['nq'], repeats, loops, 1, 'qpivot', config['nprobe'],
              budgets, '-', '-'], out/f'{phase}.log', env, prefix)
     summarize(out, args.dataset, config['nprobe'], config['nq'], args.repeats,

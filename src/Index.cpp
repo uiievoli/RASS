@@ -507,7 +507,7 @@ Index& Index::operator=(Index&& other) noexcept {
     projection_uniform_prefix=other.projection_uniform_prefix;
     collect_projection_orders=other.collect_projection_orders;
     projection_mm_dynamic=other.projection_mm_dynamic;
-    projection_order_within_active_prefix=other.projection_order_within_active_prefix;
+    projection_allow_budget_cap=other.projection_allow_budget_cap;
     projection_reuse_workspace=other.projection_reuse_workspace;
     projection_moment_dims=other.projection_moment_dims;
     projection_list_means=std::move(other.projection_list_means);
@@ -1522,8 +1522,12 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
             const bool use_U = multipivot_mode == MultiPivotMode::PROJECTION &&
                                global_pivots.has_U(global_active_pivots);
             if (use_U && (projection_query_energy || projection_moment_score || projection_uniform_prefix)) {
-                const size_t scored_pivots = projection_order_within_active_prefix
-                    ? global_active_pivots : global_pivots.count;
+                // Direction selection ranks the complete persisted PCA bank.
+                // global_active_pivots is only the per-list filtering budget/cap;
+                // restricting scoring to that canonical prefix would make a
+                // "dynamic order" merely permute PCA[0:P] and leave all stored
+                // coordinates after P unusable.
+                const size_t scored_pivots = global_pivots.count;
                 global_query_signature_ready = computePcaQuerySignature(
                     queries+i*d,d,global_pivots,scored_pivots,
                     global_query_pivot_squared.data(),global_query_signature_z.data(),
@@ -2344,8 +2348,8 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
         throw std::invalid_argument("query-energy requires global float32 PCA projection, P>=2, no dynamic/progressive/prefix/microblocks/subnn");
     if(projection_mm_dynamic&&(!projection_dynamic||!projection_block_size||projection_moment_score!=2||projection_query_energy||
        projection_query_adaptive||projection_uniform_prefix||projection_scan_ascending||projection_progressive<0||projection_progressive>2||
-       (!projection_order_within_active_prefix&&multipivot_active_count!=global_pivots.count)||
-       (projection_order_within_active_prefix&&multipivot_active_count>global_pivots.count)))
+       (!projection_allow_budget_cap&&multipivot_active_count!=global_pivots.count)||
+       (projection_allow_budget_cap&&multipivot_active_count>global_pivots.count)))
         throw std::invalid_argument("MM dynamic requires a valid Global MM cap, original list predictor and block size");
     if(projection_reuse_workspace&&(!projection_dynamic||!projection_progressive))throw std::invalid_argument("workspace reuse requires staged dynamic mode");
     if((projection_uniform_prefix&&(projection_query_energy||projection_moment_score||projection_query_adaptive))||
