@@ -17,7 +17,7 @@ from qpivot_profiles import CONFIG, DEFAULT_CONFIG, load_profiles
 ROOT = Path(__file__).resolve().parents[1]
 def sweep_defaults(configuration):
     return {ds:dict(nlist=p['nlist'],nprobe=p['fixed_nprobe'],pmax=p['budget_grid'],
-                    nq=20 if ds.startswith('dbpedia') else 32,loops=p['loops'],normalize=p.get('normalize',False))
+                    nq=64,loops=p['loops'],normalize=p.get('normalize',False))
             for ds,p in configuration['datasets'].items()}
 
 
@@ -136,9 +136,10 @@ def main():
     parser.add_argument('--nq', type=int)
     parser.add_argument('--loops', type=int)
     parser.add_argument('--repeats', type=int, default=7)
+    parser.add_argument('--query-threads','--threads',type=int,default=56)
     parser.add_argument('--seed', type=int, default=19)
-    parser.add_argument('--cpus', default='0-31')
-    parser.add_argument('--offline-threads', type=int, default=8)
+    parser.add_argument('--cpus', default='0-55')
+    parser.add_argument('--offline-threads', type=int, default=56)
     parser.add_argument('--build-jobs', type=int, default=8)
     parser.add_argument('--build-root', type=Path, default=ROOT / 'build-qpivot')
     parser.add_argument('--skip-build', action='store_true')
@@ -180,7 +181,7 @@ def main():
     if pmax_values[-1] > min(d+1, 512):
         parser.error(f'Pmax exceeds min(D+1,512)={min(d+1,512)}')
     if not 1 <= config['nprobe'] <= config['nlist']: parser.error('invalid nprobe')
-    if not 1 <= config['nq'] <= available or args.repeats < 3: parser.error('invalid nq/repeats')
+    if not 1 <= args.query_threads <= config['nq'] <= available or args.repeats < 3: parser.error('require 1 <= query-threads <= nq <= available and repeats >=3')
     out.mkdir(parents=True)
     env = dict(os.environ, OMP_NUM_THREADS=str(args.offline_threads), OMP_DYNAMIC='FALSE',
                OMP_PROC_BIND='close', OMP_PLACES='cores', OPENBLAS_NUM_THREADS='1',
@@ -215,12 +216,13 @@ def main():
         index_policy='fresh Global PCA from base vectors; one shared index for all budget caps',
         config_source=str(args.config.resolve()),
         sweep_semantics='budget caps within one fixed bank; every cap scores the same persisted dictionary',
-        query_threads=1, offline_threads=args.offline_threads)
+        query_threads=args.query_threads, offline_threads=args.offline_threads,
+        timing_semantics='parallel batch wall time / queries; QPS is aggregate throughput')
     (out/'protocol.json').write_text(json.dumps(protocol, indent=2, ensure_ascii=False)+'\n')
     budgets = ','.join(str(p-1) for p in pmax_values[:-1])
     for phase, repeats, loops in [('stats', 1, 1), ('perf', args.repeats, config['loops'])]:
         run([build_root/phase/'bin/benchmark_query_energy', index, query, '-',
-             out/f'{phase}.csv', config['nq'], repeats, loops, 1, 'qpivot', config['nprobe'],
+             out/f'{phase}.csv', config['nq'], repeats, loops, args.query_threads, 'qpivot', config['nprobe'],
              budgets, '-', '-'], out/f'{phase}.log', env, prefix)
     summarize(out, args.dataset, config['nprobe'], config['nq'], args.repeats,
               config['loops'], pmax_values)

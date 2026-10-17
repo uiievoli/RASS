@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run IVF/Triangle/QPivot nprobe sweeps and plot latency/QPS/pruning vs recall."""
+"""Run parallel IVF/Tribase/Global/QPivot sweeps on one fresh Global PCA index."""
 import argparse
 import csv
 import json
@@ -15,7 +15,7 @@ from qpivot_index_setup import prepare_global_index
 from qpivot_profiles import CONFIG, DEFAULT_CONFIG, PROFILES, load_profiles
 
 ROOT = Path(__file__).resolve().parents[1]
-METHODS = ('ivf', 'triangle', 'qpivot')
+METHODS = ('ivf', 'triangle', 'global', 'qpivot')
 
 
 def run(command, log, env, prefix=()):
@@ -97,7 +97,16 @@ def write_summary(root, datasets, profiles, repeats):
                 triangle, mp = int(stat['triangle_pruned']), int(stat['mp_pruned'])
                 if total <= 0 or exact + triangle + mp != total:
                     raise ValueError(f'candidate accounting failed: {dataset}/{nprobe}/{method}')
-                mean_p = 0.0
+                query_threads=int(stat['threads'])
+                if any(int(row['threads'])!=query_threads for row in timed):raise ValueError('query thread count mismatch')
+                mean_p = float(cfg['pmax']) if method=='global' else 0.0
+                if method=='global' and int(stat['directions'])!=cfg['pmax']-1:
+                    raise ValueError('Global must scan every persisted PCA direction')
+                if method=='global':
+                    selected=[row for row in hist if row['method']==method]
+                    if sum(int(row['list_visits']) for row in selected)!=cfg['nq']*nprobe or any(
+                        int(row['native_pivots'])!=cfg['pmax'] for row in selected):
+                        raise ValueError('Global static pivot histogram mismatch')
                 if method == 'qpivot':
                     selected = [row for row in hist if row['method'] == method]
                     visits = sum(int(row['list_visits']) for row in selected)
@@ -109,7 +118,8 @@ def write_summary(root, datasets, profiles, repeats):
                     median_qps=1000/np.median(times), qps_min=1000/times.max(), qps_max=1000/times.min(),
                     overall_prune_rate=(total-exact)/total, triangle_prune_rate=triangle/total,
                     mp_prune_rate=mp/total, mean_selected_pivots=mean_p,
-                    perf_repeats=repeats, nq=cfg['nq'], pmax=cfg['pmax']))
+                    perf_repeats=repeats, nq=cfg['nq'], pmax=cfg['pmax'],query_threads=query_threads,
+                    timing_semantics='batch wall time / queries; reciprocal of throughput'))
             same = [row for row in summary if row['dataset']==dataset and row['nprobe']==nprobe]
             if max(row['recall'] for row in same)-min(row['recall'] for row in same) > 1e-12:
                 raise ValueError(f'method recall mismatch: {dataset}/nprobe{nprobe}')
@@ -132,8 +142,9 @@ def main():
     parser.add_argument('--nlist',type=int);parser.add_argument('--pmax',type=int)
     parser.add_argument('--nprobes',type=int,nargs='+');parser.add_argument('--nq',type=int)
     parser.add_argument('--loops',type=int);parser.add_argument('--repeats',type=int,default=5)
+    parser.add_argument('--query-threads','--threads',type=int,default=56,help='parallel query workers (default 56); independent queries are distributed across workers')
     parser.add_argument('--recall-min',type=float,default=.9)
-    parser.add_argument('--cpus',default='0-31');parser.add_argument('--offline-threads',type=int,default=8)
+    parser.add_argument('--cpus',default='0-55');parser.add_argument('--offline-threads',type=int,default=56)
     parser.add_argument('--build-jobs',type=int,default=8)
     parser.add_argument('--build-root',type=Path,default=ROOT/'build-qpivot')
     parser.add_argument('--skip-build',action='store_true');parser.add_argument('--summarize-only',action='store_true')
@@ -164,7 +175,8 @@ def main():
         cfg['nprobes']=sorted(set(cfg['nprobes']));cfg['dictionary_directions']=cfg['pmax']-1;profiles[dataset]=cfg
     if args.show_config:
         print(json.dumps(profiles,indent=2));return
-    if args.repeats<3:parser.error('repeats must be >=3')
+    if args.repeats<3 or args.query_threads<1:parser.error('repeats must be >=3 and query-threads positive')
+    if any(cfg['nq']<args.query_threads for cfg in profiles.values()):parser.error('nq must be at least query-threads to exercise every worker')
     out.mkdir(parents=True)
     env=dict(os.environ,OMP_NUM_THREADS=str(args.offline_threads),OMP_DYNAMIC='FALSE',OMP_PROC_BIND='close',
              OMP_PLACES='cores',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1',OMP_WAIT_POLICY='PASSIVE',
@@ -181,7 +193,9 @@ def main():
                  '-j',args.build_jobs],out/f'build_{phase}.log',env,prefix)
     protocol=dict(experiment='QPivot recall sweep',datasets=args.datasets,profiles=profiles,repeats=args.repeats,
                   config=str(args.config.resolve()),config_version=configuration['version'],
-                  multipivot_scope='global',query_threads=1,methods=list(METHODS),resolved_indexes={},
+                  multipivot_scope='global',query_threads=args.query_threads,methods=list(METHODS),resolved_indexes={},
+                  timing_semantics='parallel batch wall time / total queries; QPS is aggregate throughput',
+                  global_policy='all persisted directions, original PCA order, no dynamic count or order',
                   index_policy='fresh Global PCA from base vectors; shared by every method and nprobe',
                   qpivot_policy='reorder/select only the persisted Pmax-1 directions; no basis replacement')
     (out/'protocol.json').write_text(json.dumps(protocol,indent=2)+'\n')
@@ -215,7 +229,7 @@ def main():
             case=directory/f'nprobe{nprobe}';case.mkdir()
             for phase,repeats,loops in [('stats',1,1),('perf',args.repeats,cfg['loops'])]:
                 run([build/phase/'bin/benchmark_query_energy',index,query,'-',case/f'{phase}.csv',
-                     cfg['nq'],repeats,loops,1,'qpivot_curve',nprobe,1,'-','-',groundtruth],
+                     cfg['nq'],repeats,loops,args.query_threads,'qpivot_curve',nprobe,1,'-','-',groundtruth],
                     case/f'{phase}.log',dataset_env,prefix)
     write_summary(out,args.datasets,profiles,args.repeats)
     plot_env=dict(os.environ,MPLCONFIGDIR=str(out/'.matplotlib'))

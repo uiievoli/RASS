@@ -9,8 +9,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-METHODS={'ivf':('IVF','#7A8793','o'),'triangle':('Triangle','#E87532','^'),'qpivot':('QPivot','#2B72B8','s')}
-METRICS=[('median_latency_ms','Latency (ms/query)','latency_recall'),
+METHODS={'ivf':('IVF','#7A8793','o'),'triangle':('Tribase (Triangle)','#E87532','^'),'global':('Global PCA (static)','#299D8F','D'),'qpivot':('QPivot','#2B72B8','s')}
+METRICS=[('median_latency_ms','Amortized query time (ms/query)','latency_recall'),
          ('median_qps','QPS','qps_recall'),('overall_prune_rate','Overall prune rate','prune_rate_recall')]
 
 
@@ -34,7 +34,7 @@ def draw(groups,metric,ylabel,output,title=None):
             ax.fill_between(x,lo,hi,color=color,alpha=.10,linewidth=0)
     ax.set_xlabel('Recall@1');ax.set_ylabel(ylabel);ax.grid(alpha=.22)
     if title:ax.set_title(title,fontweight='bold',fontsize=15)
-    ax.legend(frameon=False,ncol=3);fig.tight_layout();output.parent.mkdir(parents=True,exist_ok=True)
+    ax.legend(frameon=False,ncol=4);fig.tight_layout();output.parent.mkdir(parents=True,exist_ok=True)
     for suffix in ('.png','.pdf'):fig.savefig(output.with_suffix(suffix),bbox_inches='tight')
     plt.close(fig)
 
@@ -61,7 +61,7 @@ def main():
                                       label=label,color=color,marker=marker,linewidth=1.8,markersize=3.5)
                 ax.set_title(dataset);ax.set_xlabel('Recall@1');ax.set_ylabel(ylabel);ax.grid(alpha=.2)
             for ax in axes.flat[len(datasets):]:ax.axis('off')
-            handles,labels=axes.flat[0].get_legend_handles_labels();fig.legend(handles,labels,loc='upper center',ncol=3,frameon=False)
+            handles,labels=axes.flat[0].get_legend_handles_labels();fig.legend(handles,labels,loc='upper center',ncol=4,frameon=False)
             fig.tight_layout(rect=(0,.0,1,.95))
             for suffix in ('.png','.pdf'):fig.savefig((figures/f'overview_{name}').with_suffix(suffix),bbox_inches='tight')
             plt.close(fig)

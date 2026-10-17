@@ -1,5 +1,19 @@
 # Global QPivot performance rerun
 
+The recall runner compares four methods using one freshly built Global index:
+IVF (no pruning), Tribase (Triangle only), Global PCA (Triangle plus all M
+directions in original PCA order, no dynamic selection), and QPivot (Triangle
+plus MM order and dynamic prefix selection). There is no per-method index build.
+Query execution defaults to 56 parallel workers (`--query-threads 56`, alias
+`--threads 56`), with independent queries distributed across workers.
+Use `--cpus 0-55` for binding. Offline construction uses `--offline-threads`.
+
+QPS is aggregate throughput. The latency plot reports amortized wall time per
+query (batch wall time divided by total queries); it is not the response
+latency of an individual concurrent request. Stage statistics remain summed
+worker time per query. Allocation diagnostics are NaN for parallel queries
+because the diagnostic allocator only observes the calling thread.
+
 The shared configuration is `scripts/qpivot_performance_profiles.json`.
 All profiles use Global PCA; Pmax includes the center and the actual projected
 dictionary has M=Pmax-1 rows. These are historical reference configurations for
@@ -26,7 +40,7 @@ bash scripts/run_qpivot_recall_sweep.sh \
   --data-root /path/to/data \
   --log-dir /path/to/logs/qpivot_global_bounded \
   --datasets all \
-  --cpus 0-55 --offline-threads 56 --build-jobs 16 --repeats 3
+  --cpus 0-55 --query-threads 56 --offline-threads 56 --build-jobs 16 --repeats 3
 ```
 
 Use a new result directory. The runner rebuilds each Global PCA index from
@@ -55,6 +69,8 @@ the resolved profiles, M, config version and exact index paths in
 `protocol.json`. nprobe grids, query counts, repetition/warmup protocol and
 the online selection algorithm are retained; SIFT1M additionally includes
 nprobe=100 for comparison with its historical dynamic experiments.
+The query count must be at least the query thread count. The budget-cap sweep
+now defaults to 64 sampled queries to support all 56 workers.
 
 The budget-cap sweep also reads the shared profiles:
 

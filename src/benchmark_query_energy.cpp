@@ -70,8 +70,8 @@ int main(int argc,char** argv) {
         const bool qpivot_mode=qpivot||qpivot_curve;
         const bool mm_policy=mode=="mm_policy"||mm_compare||qpivot_mode;
         if(with_moments&&mode!="moments"&&!calibrate&&!adaptive&&!scan_order&&!mm_policy)throw std::invalid_argument("invalid benchmark mode");
-        if(mm_policy&&((!qpivot_mode&&argc!=14)||(qpivot_mode&&(argc<14||argc>15))||std::stoi(argv[8])!=1))
-            throw std::invalid_argument("MM/QPivot requires model-or-dash, per-list-index-or-dash and one query thread");
+        if(mm_policy&&((!qpivot_mode&&argc!=14)||(qpivot_mode&&(argc<14||argc>15))||(!qpivot_mode&&std::stoi(argv[8])!=1)))
+            throw std::invalid_argument("MM/QPivot requires model-or-dash and per-list-index-or-dash; legacy MM modes require one query thread");
         if(mm_compare&&(std::string(argv[12])!="-"||std::string(argv[13])!="-"))
             throw std::invalid_argument("mm_compare accepts only the two MM policies; pass - -");
         if(qpivot_mode&&(std::string(argv[12])!="-"||std::string(argv[13])!="-"))
@@ -207,6 +207,7 @@ int main(int argc,char** argv) {
         }
         if(qpivot_curve)plans={{0,false,0,false,false,false,false,false,0,true},
                                {0,false},
+                               {m,false},
                                {m,false,2,true,false,false,false,false,1}};
         std::unique_ptr<Index> perlist;
         QueryPlanModel energy_model,mean_model;
@@ -242,7 +243,7 @@ int main(int argc,char** argv) {
             // The stats build records QPivot's chosen rows so an experiment can
             // verify that a small budget really selects from the complete
             // persisted PCA bank rather than only permuting PCA[0:L].
-            target.collect_projection_orders=scan_order||qpivot_mode;
+            target.collect_projection_orders=scan_order||(qpivot_mode&&plan.mm_policy!=0);
             target.projection_mm_dynamic=plan.mm_policy!=0;
             target.projection_allow_budget_cap=qpivot_mode;
             target.projection_reuse_workspace=plan.mm_policy==2||plan.mm_policy==3;
@@ -324,7 +325,7 @@ int main(int argc,char** argv) {
                     : std::numeric_limits<double>::quiet_NaN();
                 // Derived stage totals are finalized outside the measured interval.
                 stats.summary();
-                const char* method=plan.baseline?"ivf":qpivot_curve&&!plan.p?"triangle":qpivot_mode?"qpivot":plan.mm_policy==1?"mm_once":plan.mm_policy==2?"mm_stage_frozen_reuse":plan.mm_policy==3?"mm_stage_updated_reuse":plan.mm_policy==4?"mm_stage_updated_alloc":
+                const char* method=plan.baseline?"ivf":qpivot_curve&&!plan.p?"triangle":qpivot_curve&&!plan.dynamic?"global":qpivot_mode?"qpivot":plan.mm_policy==1?"mm_once":plan.mm_policy==2?"mm_stage_frozen_reuse":plan.mm_policy==3?"mm_stage_updated_reuse":plan.mm_policy==4?"mm_stage_updated_alloc":
                     plan.perlist?"original_perlist_dynamic":plan.dynamic?"original_global_dynamic":plan.adaptive?(mm_policy?"mm_query_model":plan.energy?"adaptive_energy":"adaptive_mean"):
                     plan.uniform?"prefix_uniform":plan.ascending?(plan.energy?"query_energy_ascending":"moment_mean_ascending"):
                     plan.p?(plan.moments==1?"moment_separation":plan.moments==2?"moment_mean":plan.energy?"query_energy":"prefix"):"triangle";
@@ -348,8 +349,8 @@ int main(int argc,char** argv) {
                     <<1e6*stats.candidate_lb_seconds/nq<<','<<1e6*stats.candidate_exact_seconds/nq<<','<<1e6*stats.other_seconds/nq<<','
                     <<1e6*stats.search_worker_seconds/nq<<','<<stats.multipivot_invalid<<','<<1e6*stats.candidate_active_copy_seconds/nq<<','
                     <<1e6*stats.progressive_control_seconds/nq<<','<<stats.progressive_stages<<','<<stats.progressive_candidate_updates<<','
-                    <<stats.progressive_workspace_growths<<','<<stats.progressive_workspace_bytes<<','<<double(allocations.calls)/(nq*loops)<<','
-                    <<double(allocations.bytes)/(nq*loops)<<','<<double(allocations.deletes)/(nq*loops)<<','
+                    <<stats.progressive_workspace_growths<<','<<stats.progressive_workspace_bytes<<','<<(threads==1?double(allocations.calls)/(nq*loops):std::numeric_limits<double>::quiet_NaN())<<','
+                    <<(threads==1?double(allocations.bytes)/(nq*loops):std::numeric_limits<double>::quiet_NaN())<<','<<(threads==1?double(allocations.deletes)/(nq*loops):std::numeric_limits<double>::quiet_NaN())<<','
                     <<(budget_visits?double(direction_sum)/budget_visits:0.)<<'\n';output.flush();
                 std::cout<<"repeat="<<repeat<<" P="<<plan.p<<" method="<<method<<" ms/query="<<1000*seconds/(loops*nq)<<std::endl;
             }
