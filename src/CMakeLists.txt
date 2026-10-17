@@ -39,6 +39,8 @@ add_executable(query_subset_oracle query_subset_oracle.cpp)
 target_link_libraries(query_subset_oracle Tribase faiss)
 add_executable(qpivot_regret_eval qpivot_regret_eval.cpp)
 target_link_libraries(qpivot_regret_eval Tribase faiss)
+add_executable(qpivot_order_eval qpivot_order_eval.cpp)
+target_link_libraries(qpivot_order_eval Tribase faiss)
 add_executable(query_score_gap query_score_gap.cpp)
 target_link_libraries(query_score_gap Tribase faiss)
 

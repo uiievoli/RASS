@@ -5,13 +5,13 @@ import csv
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import struct
 import subprocess
 import sys
 
 import numpy as np
+from qpivot_index_setup import prepare_global_index
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = {
@@ -26,8 +26,6 @@ PROFILES = {
         nq=100, loops=1, normalize=True),
 }
 METHODS = ('ivf', 'triangle', 'qpivot')
-INDEX_MAGIC = b'TRIBASE2'
-INDEX_VERSION = 10
 
 
 def run(command, log, env, prefix=()):
@@ -84,41 +82,6 @@ def groundtruth_prefix(source, destination, nq, source_queries):
         out.write(struct.pack('<II', nq, 1)); out.write(struct.pack(f'<{nq}i', *ids))
 
 
-def current_index(path):
-    try:
-        with path.open('rb') as stream:
-            return stream.read(8) == INDEX_MAGIC and struct.unpack('<I', stream.read(4))[0] == INDEX_VERSION
-    except (OSError, struct.error):
-        return False
-
-
-def find_source_index(directory, nlist, normalize=False):
-    candidates = list(directory.glob(
-        f'v*_nlist_{nlist}_metric_l2_opt_1_subk_15_subNprobeRatio_1_mp_*_P0_seed*.index'))
-    candidates += list(directory.glob(f'recall_shared_v2_nlist_{nlist}_*_triangle.index'))
-    if normalize:
-        candidates += list(directory.glob('shared_unit_triangle.index'))
-    candidates = [path for path in candidates if ('unit' in path.name)==normalize]
-    candidates = [path for path in candidates if current_index(path)]
-    if not candidates: return None
-    def key(path):
-        match = re.match(r'v(\d+)_', path.name)
-        return (int(match.group(1)) if match else 1000, path.stat().st_mtime_ns)
-    return max(candidates, key=key)
-
-
-def find_rich_index(directory, nlist, pmax, normalize=False):
-    candidates = list(directory.glob(
-        f'*nlist_{nlist}_*mp_global_pca_P{pmax}_seed0*.index'))
-    candidates += list(directory.glob(
-        f'*nlist{nlist}*global*pca*P{pmax}*.index'))
-    candidates = list(dict.fromkeys(path for path in candidates
-                                    if '.partial' not in path.name and current_index(path)
-                                    and ('unit' in path.name)==normalize))
-    if not candidates: return None
-    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
-
-
 def read(path):
     with path.open(newline='') as stream: return list(csv.DictReader(stream))
 
@@ -171,6 +134,7 @@ def main():
     parser.add_argument('--log-dir',required=True,type=Path)
     parser.add_argument('--datasets',nargs='+',default=['sift1m'],choices=sorted(PROFILES))
     parser.add_argument('--index',type=Path,help='single dataset only')
+    parser.add_argument('--index-root',type=Path,action='append',default=[],help='extra reusable index/cache root; repeatable')
     parser.add_argument('--query',type=Path,help='single dataset only')
     parser.add_argument('--groundtruth',type=Path,help='single dataset only')
     parser.add_argument('--nlist',type=int);parser.add_argument('--pmax',type=int)
@@ -212,7 +176,7 @@ def main():
             run(['cmake','-S',ROOT,'-B',directory,'-DCMAKE_BUILD_TYPE=Release',
                  f'-DENABLE_STATS={"ON" if phase=="stats" else "OFF"}','-DENABLE_LTO=OFF',*args.cmake_arg],
                 out/f'configure_{phase}.log',env,prefix)
-            run(['cmake','--build',directory,'--target','benchmark_query_energy','build_global_pca_index',
+            run(['cmake','--build',directory,'--target','benchmark_query_energy','build_global_pca_index','query',
                  '-j',args.build_jobs],out/f'build_{phase}.log',env,prefix)
     protocol=dict(experiment='QPivot recall sweep',datasets=args.datasets,profiles=profiles,repeats=args.repeats,
                   multipivot_scope='global',query_threads=1,methods=list(METHODS))
@@ -224,20 +188,14 @@ def main():
         normalize=cfg.get('normalize',False)
         unit_tag='_unit' if normalize else ''
         gt_source=(args.groundtruth or source/'result'/f'groundtruth_1{unit_tag}.bin').resolve()
-        if not query_source.is_file() or not gt_source.is_file():
-            raise ValueError(f'missing query/groundtruth for {dataset}')
+        if not query_source.is_file():
+            raise ValueError(f'missing query vectors for {dataset}')
         d,source_nq,_=fvecs_info(query_source)
         if cfg['pmax']>min(d+1,512):raise ValueError(f'{dataset}: Pmax exceeds D+1/512')
         if cfg['nq']>source_nq:raise ValueError(f'{dataset}: nq exceeds available queries')
-        index_dir=source/'index';index_dir.mkdir(parents=True,exist_ok=True)
-        index=args.index.resolve() if args.index else find_rich_index(index_dir,cfg['nlist'],cfg['pmax'],normalize)
-        if index is None:
-            source_index=find_source_index(index_dir,cfg['nlist'],normalize)
-            if source_index is None:
-                raise ValueError(f'missing reusable P0 Triangle index for {dataset}')
-            index=index_dir/f'qpivot_v10_nlist_{cfg["nlist"]}{unit_tag}_mp_global_pca_P{cfg["pmax"]}_seed0.index'
-            run([build/'perf/bin/build_global_pca_index',source_index,index,cfg['pmax']],
-                out/f'build_index_{dataset}.log',env,prefix)
+        index=prepare_global_index(source,cfg['nlist'],cfg['pmax'],normalize,build/'perf',out,
+            lambda command,log:run(command,log,env,prefix),explicit=args.index,index_roots=args.index_root,
+            require_groundtruth=True,groundtruth=args.groundtruth)
         if not index.is_file():raise ValueError(f'missing rich Global PCA index for {dataset}')
         directory=out/dataset;directory.mkdir()
         query=directory/'queries.fvecs';copy_query_prefix(query_source,query,cfg['nq'])
