@@ -500,11 +500,14 @@ Index& Index::operator=(Index&& other) noexcept {
     multipivot_built_count = other.multipivot_built_count;
     multipivot_active_count = other.multipivot_active_count;
     projection_query_energy = other.projection_query_energy;
+    projection_distance_only = other.projection_distance_only;
+    projection_fixed_block_checkpoints = other.projection_fixed_block_checkpoints;
     projection_query_adaptive=other.projection_query_adaptive;
     query_plan_model=std::move(other.query_plan_model);
     projection_moment_score=other.projection_moment_score;
     projection_scan_ascending=other.projection_scan_ascending;
     projection_uniform_prefix=other.projection_uniform_prefix;
+    projection_selection_pool_dims=other.projection_selection_pool_dims;
     collect_projection_orders=other.collect_projection_orders;
     projection_mm_dynamic=other.projection_mm_dynamic;
     projection_allow_budget_cap=other.projection_allow_budget_cap;
@@ -1470,6 +1473,8 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
     std::unique_ptr<IVFScanBase> scaner_quantizer = get_scanner(metric, OPT_NONE, nprobe, edge_device_enabled);
     std::unique_ptr<IVFScanBase> scaner = get_scanner(metric, opt_level, k, edge_device_enabled);
     scaner->progressive_mode = projection_progressive;
+    scaner->projection_distance_only = projection_distance_only;
+    scaner->projection_fixed_block_checkpoints = projection_fixed_block_checkpoints;
     scaner->progressive_reuse_workspace=projection_reuse_workspace;
     if(projection_reuse_workspace) {
         size_t maximum_list=0;for(size_t lid=0;lid<nlist;++lid)maximum_list=std::max(maximum_list,lists[lid].list_size);
@@ -1521,13 +1526,29 @@ void Index::single_thread_search(size_t n, const float* queries, size_t k, float
 #endif
             const bool use_U = multipivot_mode == MultiPivotMode::PROJECTION &&
                                global_pivots.has_U(global_active_pivots);
-            if (use_U && (projection_query_energy || projection_moment_score || projection_uniform_prefix)) {
+            if (use_U && projection_distance_only) {
+                // PD-only control: projection coordinates suffice. In particular,
+                // do not compute the center norm, projected energy, or residual sqrt.
+                for (size_t axis = 0; axis < d; ++axis)
+                    query_centered[axis] = queries[i*d + axis] - global_pivots.codes[axis];
+                for (size_t dim = 0; dim + 1 < global_active_pivots; ++dim) {
+                    float z = 0.0f;
+#pragma omp simd reduction(+ : z)
+                    for (size_t axis = 0; axis < d; ++axis)
+                        z += query_centered[axis] * global_pivots.U[dim*d + axis];
+                    global_query_signature_z[dim] = z;
+                }
+                global_query_signature_ready = true;
+                global_full_query_signature_ready = true;
+                global_projection_ready_dims = global_active_pivots - 1;
+            } else if (use_U && (projection_query_energy || projection_moment_score || projection_uniform_prefix)) {
                 // Direction selection ranks the complete persisted PCA bank.
                 // global_active_pivots is only the per-list filtering budget/cap;
                 // restricting scoring to that canonical prefix would make a
                 // "dynamic order" merely permute PCA[0:P] and leave all stored
                 // coordinates after P unusable.
-                const size_t scored_pivots = global_pivots.count;
+                const size_t scored_pivots = projection_selection_pool_dims
+                    ? projection_selection_pool_dims + 1 : global_pivots.count;
                 global_query_signature_ready = computePcaQuerySignature(
                     queries+i*d,d,global_pivots,scored_pivots,
                     global_query_pivot_squared.data(),global_query_signature_z.data(),
@@ -2338,6 +2359,18 @@ Stats Index::search(size_t n, const float* queries, size_t k, float* distances, 
     if (n == 0) {
         return Stats();
     }
+    if (projection_distance_only &&
+        (metric != METRIC_L2 || multipivot_scope != MultiPivotScope::GLOBAL ||
+         multipivot_method != "pca" || multipivot_mode != MultiPivotMode::PROJECTION ||
+         multipivot_active_count < 2 || signature_precision != SignaturePrecision::FLOAT32 ||
+         projection_dynamic || projection_progressive || projection_prefix_length ||
+         projection_query_energy || projection_moment_score || projection_uniform_prefix ||
+         microblock_enabled || (opt_level & (OPT_SUBNN_L2 | OPT_SUBNN_IP))))
+        throw std::invalid_argument("PD-only ablation requires fixed Global float32 PCA without selection or other filters");
+    if(projection_selection_pool_dims &&
+       (projection_selection_pool_dims>=global_pivots.count ||
+        multipivot_active_count>projection_selection_pool_dims+1))
+        throw std::invalid_argument("selection pool must fit the persisted bank and cover the active budget");
     if ((projection_query_energy || projection_moment_score || projection_uniform_prefix) && (metric!=MetricType::METRIC_L2 ||
         multipivot_scope!=MultiPivotScope::GLOBAL || multipivot_method!="pca" ||
         multipivot_mode!=MultiPivotMode::PROJECTION || multipivot_active_count<2 ||

@@ -1093,3 +1093,78 @@ TEST(MultiPivotTest, LbProbeWritesSummaryWithValidTightness) {
     std::filesystem::remove(raw, ec);
     std::filesystem::remove(summary, ec);
 }
+
+TEST(StageAblation, ProjectionOnlyMaskMatchesScalar) {
+    constexpr size_t dims=11,count=19;
+    std::vector<float> soa(dims*count),q(dims);
+    for(size_t dim=0;dim<dims;++dim) {
+        q[dim]=float(dim)*.17f;
+        for(size_t c=0;c<count;++c)soa[dim*count+c]=float((dim*7+c*3)%23)*.13f;
+    }
+    std::array<size_t,dims> order;
+    std::iota(order.begin(),order.end(),0);std::reverse(order.begin(),order.end());
+    for(size_t block:{size_t(1),size_t(4),dims})for(const size_t* ids:{static_cast<const size_t*>(nullptr),static_cast<const size_t*>(order.data())})
+        for(float radius:{0.f,.5f,2.f,20.f,std::numeric_limits<float>::infinity()}) {
+            const auto mask=tribase::projectedDistancePruneMask8(q.data(),soa.data(),0,count,dims,block,radius,ids);
+            for(unsigned lane=0;lane<8;++lane)
+                EXPECT_EQ(bool(mask&(1u<<lane)),tribase::projectedDistancePrunes(
+                    q.data(),soa.data(),lane,count,dims,block,radius,ids));
+        }
+}
+
+TEST(StageAblation, FiveVariantsPreserveTopKAndSignatureLayout) {
+    using namespace tribase;
+    constexpr size_t nb=1025,nq=12,d=80,nlist=16;
+    auto base=randomVectors(nb,d,20261018),queries=randomVectors(nq,d,20261019);
+    std::copy_n(base.data(),3*d,queries.data());
+    Index index(d,nlist,nlist,METRIC_L2,OPT_TRIANGLE,0,1,1,false);
+    index.configure_multipivot(MultiPivotScope::GLOBAL,"pca",65,0);
+    index.train(nb,base.data());index.add(nb,base.data());index.build_projection_moments();
+    const auto original_signature=index.lists[0].pivots.signature_data;
+    index.projection_fixed_block_checkpoints=true;
+    for(size_t k:{size_t(1),size_t(10)})for(size_t probe:{size_t(1),size_t(5),nlist}) {
+        index.nprobe=probe;
+        std::vector<idx_t> expected(nq*k),actual(nq*k);
+        std::vector<float> ed(nq*k),ad(nq*k);
+        index.projection_distance_only=false;index.projection_moment_score=0;
+        index.projection_dynamic=false;index.projection_mm_dynamic=false;
+        index.projection_selection_pool_dims=0;
+        index.set_multipivot_search(MultiPivotMode::NONE,0);
+        index.search(nq,queries.data(),k,ed.data(),expected.data());
+        for(size_t block:{size_t(1),size_t(8),size_t(64)})for(int variant=1;variant<5;++variant) {
+            index.projection_distance_only=variant==1;
+            index.projection_moment_score=variant>=3?2:0;
+            index.projection_selection_pool_dims=variant>=3?64:0;
+            index.projection_dynamic=variant==4;index.projection_mm_dynamic=variant==4;
+            index.projection_allow_budget_cap=variant==4;
+            index.projection_block_size=block;
+            index.set_multipivot_search(MultiPivotMode::PROJECTION,65);
+            index.search(nq,queries.data(),k,ad.data(),actual.data());
+            expectSameResults(expected,ed,actual,ad);
+        }
+    }
+    EXPECT_EQ(original_signature,index.lists[0].pivots.signature_data);
+    // Optional CLI fixture for the perf/stats runner smoke test. Normal unit
+    // tests do not write files. The fixture is synthetic, never a dataset cache.
+    if(const char* directory=std::getenv("TRIBASE_ABLATION_TEST_FIXTURE")) {
+        const std::filesystem::path folder(directory);
+        std::filesystem::create_directories(folder);
+        index.save_index((folder/"global_pca_P65.index").string());
+        std::ofstream q(folder/"queries.fvecs",std::ios::binary);
+        const uint32_t dimension=d;
+        for(size_t i=0;i<nq;++i) {
+            q.write(reinterpret_cast<const char*>(&dimension),sizeof(dimension));
+            q.write(reinterpret_cast<const char*>(queries.data()+i*d),d*sizeof(float));
+        }
+        index.projection_distance_only=false;index.projection_moment_score=0;
+        index.projection_dynamic=false;index.projection_mm_dynamic=false;
+        index.projection_selection_pool_dims=0;index.nprobe=nlist;
+        index.set_multipivot_search(MultiPivotMode::NONE,0);
+        std::vector<float> distance(nq);std::vector<idx_t> labels(nq);
+        index.search(nq,queries.data(),1,distance.data(),labels.data());
+        std::ofstream gt(folder/"groundtruth.i32bin",std::ios::binary);
+        const uint32_t shape[2]={nq,1};gt.write(reinterpret_cast<const char*>(shape),sizeof(shape));
+        for(auto label:labels){const int32_t id=static_cast<int32_t>(label);gt.write(reinterpret_cast<const char*>(&id),sizeof(id));}
+        ASSERT_TRUE(q.good());ASSERT_TRUE(gt.good());
+    }
+}

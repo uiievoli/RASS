@@ -16,6 +16,7 @@
 #include <random>
 #include <set>
 #include <sstream>
+#include <cstdlib>
 
 using namespace tribase;
 using Clock=std::chrono::steady_clock;
@@ -50,6 +51,26 @@ int main(int argc,char** argv) {
         auto header=split(line);std::map<std::string,size_t> column;
         for(size_t i=0;i<header.size();++i)column[header[i]]=i;
         std::vector<Visit> visits;
+        // Optional query-global MM permutation captured by the production search.
+        // Coordinates remain in the persisted bank's canonical row numbering.
+        std::map<size_t,std::vector<size_t>> orders;
+        if(const char* path=std::getenv("TRIBASE_REPLAY_ORDERS")) {
+            std::ifstream order_input(path);std::string row;
+            if(!std::getline(order_input,row))throw std::runtime_error("missing orders file");
+            const std::string method=std::getenv("TRIBASE_REPLAY_METHOD")?std::getenv("TRIBASE_REPLAY_METHOD"):"qpivot";
+            while(std::getline(order_input,row)) {
+                const auto fields=split(row);
+                if(fields.at(0)!=method || fields.at(1)!="0")continue;
+                auto& permutation=orders[std::stoull(fields.at(2))];
+                std::istringstream values(fields.at(4));size_t dim;
+                while(values>>dim)permutation.push_back(dim);
+                auto sorted=permutation;std::sort(sorted.begin(),sorted.end());
+                if(sorted.size()+1!=index.global_pivots.count)throw std::runtime_error("incomplete MM permutation");
+                for(size_t i=0;i<sorted.size();++i)if(sorted[i]!=i)throw std::runtime_error("invalid MM permutation");
+            }
+            if(orders.size()!=size_t(nq))throw std::runtime_error("missing query orders");
+        }
+        const bool exhaustive=std::getenv("TRIBASE_REPLAY_EXHAUSTIVE")!=nullptr;
         while(std::getline(input,line)) {
             auto cells=split(line);
             auto value=[&](const char* name)->const std::string& {return cells.at(column.at(name));};
@@ -91,11 +112,24 @@ int main(int argc,char** argv) {
                 const size_t maximum=std::min(v.configured,geometry.count);
                 if(!geometry.has_U(maximum)||maximum<2||v.selected>maximum) {++errors;continue;}
                 const float* q=queries.get()+v.qid*index.d;
+                const size_t* direction_order=orders.empty()?nullptr:orders.at(v.qid).data();
+                scanner->projection_order=direction_order;
                 scanner->set_query(q);scanner->progressive_mode=0;scanner->progressive_geometry=&geometry;
                 std::vector<float> full_z(maximum),z(maximum),centered(index.d);
                 std::vector<double> qsq(maximum);
                 float full_rho=0;
                 computePcaQuerySignature(q,index.d,geometry,maximum,qsq.data(),full_z.data(),&full_rho,centered.data());
+                if(direction_order) {
+                    // QPivot materializes the complete bank and its ordered
+                    // full residual before entering the first list. Cache it
+                    // here too; prefix residuals are computed by scan_codes.
+                    float remaining=static_cast<float>(qsq[0]);
+                    for(size_t k=0;k+1<maximum;++k) {
+                        const float qz=full_z[direction_order[k]];
+                        remaining=std::max(0.0f,remaining-qz*qz);
+                    }
+                    full_rho=std::sqrt(remaining);
+                }
                 if(index.multipivot_scope==MultiPivotScope::PER_LIST)qsq[0]=v.coarse;
                 std::unique_ptr<bool[]> skip(new bool[list.list_size+1]());
                 std::vector<size_t> frozen_pruned(maximum+1,0);
@@ -104,7 +138,7 @@ int main(int argc,char** argv) {
                     float hx2=list.pivots.candidate_centroid_squared[ci],hq2=qsq[0],score=0;
                     for(size_t p=1;p<=maximum;++p) {
                         if(p>1) {
-                            const size_t dim=p-2;
+                            const size_t dim=direction_order?direction_order[p-2]:p-2;
                             const float xz=list.pivots.signature_data[dim*list.list_size+ci];
                             const float delta=full_z[dim]-xz;score+=delta*delta;
                             hq2=std::max(0.0f,hq2-full_z[dim]*full_z[dim]);
@@ -166,6 +200,7 @@ int main(int argc,char** argv) {
                 std::vector<size_t> coarse{0,1,maximum,v.selected};
                 const size_t step=std::max<size_t>(8,(maximum+31)/32);
                 for(size_t p=9;p<maximum;p+=step)coarse.push_back(p);
+                if(exhaustive)for(size_t p=0;p<=maximum;++p)coarse.push_back(p);
                 std::mt19937 random(vi+19);std::shuffle(coarse.begin(),coarse.end(),random);
                 for(size_t p:coarse)measure(p);
                 const auto compare=[](const auto& a,const auto& b){return a.second.ns<b.second.ns;};
@@ -181,6 +216,7 @@ int main(int argc,char** argv) {
                 for(const auto& [p,t]:measured)screened.push_back(t);
                 std::sort(screened.begin(),screened.end(),[](const Timing& a,const Timing& b){return a.ns<b.ns;});
                 std::set<size_t> shortlist{0,v.selected};
+                if(exhaustive)for(size_t p=0;p<=maximum;++p)shortlist.insert(p);
                 for(size_t i=0;i<std::min<size_t>(5,screened.size());++i)shortlist.insert(screened[i].p);
                 auto batched=[&](size_t p,bool actual)->Timing {
                     Timing last=once(p,actual);

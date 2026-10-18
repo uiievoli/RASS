@@ -41,6 +41,8 @@ add_executable(qpivot_regret_eval qpivot_regret_eval.cpp)
 target_link_libraries(qpivot_regret_eval Tribase faiss)
 add_executable(qpivot_order_eval qpivot_order_eval.cpp)
 target_link_libraries(qpivot_order_eval Tribase faiss)
+add_executable(qpivot_fixed_order_perf qpivot_fixed_order_perf.cpp)
+target_link_libraries(qpivot_fixed_order_perf Tribase faiss)
 add_executable(query_score_gap query_score_gap.cpp)
 target_link_libraries(query_score_gap Tribase faiss)
 
@@ -65,3 +67,7 @@ target_link_libraries(import_legacy_index Tribase faiss)
 add_executable(uniform_dataset_generate uniform_dataset_generate.cpp)
 
 add_subdirectory(tests)
+
+# Query-only signature / residual / order / adaptive stage-cost ablation.
+add_executable(qpivot_stage_ablation qpivot_stage_ablation.cpp)
+target_link_libraries(qpivot_stage_ablation Tribase faiss)

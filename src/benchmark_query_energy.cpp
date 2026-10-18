@@ -241,6 +241,7 @@ int main(int argc,char** argv) {
         auto select=[&](const Plan& plan) {
             selected_index=plan.perlist?perlist.get():&index;
             auto& target=*selected_index;
+            target.collect_list_stats=std::getenv("TRIBASE_CAPTURE_LIST_VISITS")!=nullptr;
             target.projection_query_energy=plan.energy;target.projection_moment_score=plan.moments;
             target.projection_scan_ascending=plan.ascending;target.projection_uniform_prefix=plan.uniform;
             // The stats build records QPivot's chosen rows so an experiment can
@@ -344,6 +345,12 @@ int main(int argc,char** argv) {
                     plan.uniform?"prefix_uniform":plan.ascending?(plan.energy?"query_energy_ascending":"moment_mean_ascending"):
                     plan.p?(plan.moments==1?"moment_separation":plan.moments==2?"moment_mean":plan.energy?"query_energy":"prefix"):"triangle";
                 for(const auto& choice:stats.query_plan_choices)choices<<method<<','<<repeat<<','<<choice.query_id<<','<<choice.directions<<','<<choice.canonical<<','<<choice.predicted_ms<<'\n';
+                if(selected_index->collect_list_stats)
+                    listVisitsToCsv(std::string(argv[4])+"."+method+".r"+std::to_string(repeat)+".visits.csv",
+                        stats.list_visits,false,"sift1m",selected_index->nlist,selected_index->nprobe,
+                        selected_index->opt_level,selected_index->multipivot_mode,selected_index->multipivot_scope,
+                        selected_index->multipivot_method,selected_index->multipivot_active_count,
+                        selected_index->multipivot_seed,1.0f);
                 for(const auto& order:stats.query_direction_orders){order_out<<method<<','<<repeat<<','<<order.query_id<<','<<order.directions.size()<<',';
                     for(size_t i=0;i<order.directions.size();++i){if(i)order_out<<' ';order_out<<order.directions[i];}order_out<<'\n';}
                 size_t budget_visits=0,direction_sum=0;

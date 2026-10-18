@@ -166,6 +166,10 @@ class Index {
     // Optional fixed-size progressive PCA blocks; 0 keeps the legacy full scan.
     size_t projection_block_size = 0;
     bool projection_dynamic = false;
+    // Query-only ablations; never persisted in an index. Keep the normal scan
+    // unchanged unless explicitly enabled by the stage-cost benchmark.
+    bool projection_distance_only = false;
+    bool projection_fixed_block_checkpoints = false;
     // Global float32 PCA: full-bank projection and top-P energy selection once/query.
     bool projection_query_energy = false;
     // 0=off, 1=expected squared separation (mean+variance), 2=mean-only ablation.
@@ -174,6 +178,8 @@ class Index {
     bool projection_scan_ascending = false;
     // Canonical prefix through the same full-query-projection/indirect block path.
     bool projection_uniform_prefix = false;
+    // Optional bounded selection pool within the persisted Global bank (0=all).
+    size_t projection_selection_pool_dims = 0;
     bool collect_projection_orders = false;
     // Allow the original list-level quantity predictor with a query-global MM order.
     bool projection_mm_dynamic = false;

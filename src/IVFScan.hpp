@@ -34,6 +34,8 @@ class IVFScanBase {
     const PivotMetadata* progressive_geometry = nullptr;
     size_t last_progressive_dims = 0;
     const size_t* projection_order = nullptr;
+    bool projection_distance_only = false;
+    bool projection_fixed_block_checkpoints = false;
     bool progressive_reuse_workspace = false;
     std::vector<uint32_t> workspace_active;
     std::vector<float> workspace_scores, workspace_energies;
@@ -361,6 +363,8 @@ class IVFScan : public IVFScanBase {
                                            projection_order != nullptr;
                 const size_t active_prefix_block = active_pivot_count > 1
                     ? active_pivot_count - 1 : 0;
+                const size_t fixed_check_block = projection_fixed_block_checkpoints
+                    ? projection_block_size : active_prefix ? active_prefix_block : projection_block_size;
 
                 auto evaluate_survivor = [&](size_t candidate_index) {
 #ifdef TRIBASE_ENABLE_STATS
@@ -670,7 +674,8 @@ class IVFScan : public IVFScanBase {
                                 signature_soa,
                                 pivot_metadata->candidate_centroid_squared.data(),
                                 base, signature_count, active_pivot_count,
-                                projected_dims, simi[0], dynamic_query_sqrt_rho, projection_order) & eligible);
+                                projection_fixed_block_checkpoints ? projection_block_size : projected_dims,
+                                simi[0], dynamic_query_sqrt_rho, projection_order) & eligible);
                         last_multipivot_checks += std::popcount(eligible);
                         last_multipivot_pruned += std::popcount(pruned);
                         uint8_t survivors = static_cast<uint8_t>(eligible & ~pruned);
@@ -694,7 +699,8 @@ class IVFScan : public IVFScanBase {
                                 signature_soa,
                                 pivot_metadata->candidate_centroid_squared.data(),
                                 base, signature_count, active_pivot_count,
-                                projected_dims, simi[0], dynamic_query_sqrt_rho, projection_order)) {
+                                projection_fixed_block_checkpoints ? projection_block_size : projected_dims,
+                                simi[0], dynamic_query_sqrt_rho, projection_order)) {
                             ++last_multipivot_pruned;
                             IF_STATS { stats->multipivot_pruned++; }
                             continue;
@@ -734,14 +740,18 @@ class IVFScan : public IVFScanBase {
                     }
 
                     uint8_t prefix_pruned_mask = 0;
-                    const uint8_t lower_bound_mask = ((projection_block_size != 0 || active_prefix) &&
+                    const uint8_t lower_bound_mask = projection_distance_only
+                        ? projectedDistancePruneMask8(query_signature_z, signature_soa,
+                              base, signature_count, active_pivot_count - 1,
+                              fixed_check_block, simi[0], projection_order)
+                        : ((projection_block_size != 0 || active_prefix) &&
                                                       !staged_projection_ok)
                         ? blockSignaturePruneMask8(
                               query_signature_z, static_cast<float>(query_pivot_squared[0]),
                               signature_soa,
                               pivot_metadata->candidate_centroid_squared.data(),
                               base, signature_count, active_pivot_count,
-                              active_prefix ? active_prefix_block : projection_block_size, simi[0],
+                              fixed_check_block, simi[0],
                               projection_order ? query_sqrt_rho : -1.0f, projection_order)
                         : staged_projection_ok
                         ? stagedSignaturePruneMask8(
@@ -797,14 +807,18 @@ class IVFScan : public IVFScanBase {
                     ++last_multipivot_checks;
                     IF_STATS { stats->multipivot_checks++; }
                     bool prefix_pruned = false;
-                    const bool pruned = ((projection_block_size != 0 || active_prefix) &&
+                    const bool pruned = projection_distance_only
+                        ? projectedDistancePrunes(query_signature_z, signature_soa,
+                              base, signature_count, active_pivot_count - 1,
+                              fixed_check_block, simi[0], projection_order)
+                        : ((projection_block_size != 0 || active_prefix) &&
                                          !staged_projection_ok)
                         ? blockSignaturePrunes(
                               query_signature_z, static_cast<float>(query_pivot_squared[0]),
                               pivot_metadata->signature_data.data(),
                               pivot_metadata->candidate_centroid_squared.data(),
                               base, pivot_metadata->signature_candidate_count, active_pivot_count,
-                              active_prefix ? active_prefix_block : projection_block_size, simi[0],
+                              fixed_check_block, simi[0],
                               projection_order ? query_sqrt_rho : -1.0f, projection_order)
                         : staged_projection_ok
                         ? stagedSignaturePrunes(
@@ -947,6 +961,11 @@ class IVFScan : public IVFScanBase {
             } else {
                 _mm_prefetch((char*)candicate, _MM_HINT_T0);
             }
+#ifdef TRIBASE_ENABLE_STATS
+            // Includes baseline/Triangle and dynamic zero-pivot scans, which
+            // bypass the projection fast path's evaluate_survivor timer.
+            const auto generic_exact_start = std::chrono::steady_clock::now();
+#endif
             if constexpr (metric == MetricType::METRIC_L2) {
 #ifndef MANUAL_SIMD
                 dis = dis_calculator(query, candicate, &d);
@@ -985,6 +1004,12 @@ class IVFScan : public IVFScanBase {
                     sqrt_simi = sqrt(simi[0]);
                 }
             }
+#ifdef TRIBASE_ENABLE_STATS
+            if (stats != nullptr) {
+                stats->candidate_exact_seconds += std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - generic_exact_start).count();
+            }
+#endif
 
             if constexpr (opt_level & OptLevel::OPT_SUBNN_L2) {
                 IF_STATS {

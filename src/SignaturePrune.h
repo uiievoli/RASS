@@ -17,6 +17,56 @@ namespace tribase {
 
 // Float32 SoA lower-bound kernel. Keeping this definition visible to IVFScan avoids
 // one function call per candidate batch in the search hot path.
+// Projection-distance-only ablation: no candidate radii, residual energies or
+// square roots are read/computed. Use the same block checkpoints as the full LB.
+TRIBASE_ALWAYS_INLINE bool projectedDistancePrunes(
+    const float* query_z, const float* soa, size_t index, size_t count,
+    size_t dims, size_t block, float radius, const size_t* order = nullptr) {
+    if (!dims) return false;
+    block = block ? block : dims;
+    const float threshold = radius + 1e-5f * std::max(1.0f, radius);
+    float score = 0.0f;
+    for (size_t begin = 0; begin < dims; begin += block) {
+        for (size_t dim = begin; dim < std::min(dims, begin + block); ++dim) {
+            const size_t row = order ? order[dim] : dim;
+            const float delta = query_z[row] - soa[row * count + index];
+            score += delta * delta;
+        }
+        if (score > threshold) return true;
+    }
+    return false;
+}
+
+TRIBASE_ALWAYS_INLINE uint8_t projectedDistancePruneMask8(
+    const float* query_z, const float* soa, size_t base, size_t count,
+    size_t dims, size_t block, float radius, const size_t* order = nullptr) {
+    if (!dims) return 0;
+    block = block ? block : dims;
+#if defined(__AVX2__)
+    const __m256 threshold = _mm256_set1_ps(radius + 1e-5f * std::max(1.0f, radius));
+    __m256 score = _mm256_setzero_ps();
+    uint8_t mask = 0;
+    for (size_t begin = 0; begin < dims; begin += block) {
+        for (size_t dim = begin; dim < std::min(dims, begin + block); ++dim) {
+            const size_t row = order ? order[dim] : dim;
+            const __m256 delta = _mm256_sub_ps(_mm256_set1_ps(query_z[row]),
+                _mm256_loadu_ps(soa + row * count + base));
+            score = _mm256_fmadd_ps(delta, delta, score);
+        }
+        mask = static_cast<uint8_t>(_mm256_movemask_ps(
+            _mm256_cmp_ps(score, threshold, _CMP_GT_OQ)));
+        if (mask == 0xff) break;
+    }
+    return mask;
+#else
+    uint8_t mask = 0;
+    for (unsigned lane = 0; lane < 8; ++lane)
+        if (projectedDistancePrunes(query_z, soa, base + lane, count, dims,
+                                   block, radius, order)) mask |= uint8_t(1u << lane);
+    return mask;
+#endif
+}
+
 TRIBASE_ALWAYS_INLINE bool signaturePrunes(const float* z_query,
                                             float sqrt_rho_query,
                                             const float* signature_soa,
